@@ -1,0 +1,21 @@
+{
+  "action.addBox": "Doboz hozzáadása",
+  "action.addView": "Nézet hozzáadása",
+  "action.hideGrid": "Segédrács elrejtése",
+  "action.showGrid": "Segédrács megjelenítése",
+  "app.stage": "Korai fejlesztői változat",
+  "app.title": "SynAIus",
+  "box.generatedName": "Doboz {count}",
+  "box.handle.end": "Jobb alsó sarok méretezése",
+  "box.handle.move": "Doboz áthelyezése",
+  "box.handle.start": "Bal felső sarok méretezése",
+  "canvas.empty": "Adj hozzá egy dobozt a munkaterülethez.",
+  "canvas.label": "Szerkeszthető munkaterület",
+  "device.defaultsLabel": "Alapértelmezett nézet eszköztípusonként",
+  "device.desktop": "Asztali gép",
+  "device.mobile": "Mobiltelefon",
+  "device.tablet": "Táblagép",
+  "view.defaultName": "Alapnézet",
+  "view.generatedName": "Nézet {count}",
+  "view.navigationLabel": "Nézetek"
+}

@@ -1,0 +1,29 @@
+{
+  "name": "synaius",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "mcp/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @synaius/portal",
+    "build": "npm run build --workspace @synaius/portal",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "check": "npm run check:secrets && npm run check:i18n && npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.0.0"
+  }
+}

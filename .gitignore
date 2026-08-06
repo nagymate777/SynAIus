@@ -1,0 +1,37 @@
+node_modules/
+dist/
+coverage/
+.vite/
+.turbo/
+
+# Local runtime state
+data/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+secrets/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local planning that must not be published
+docs/private/
+.private/
