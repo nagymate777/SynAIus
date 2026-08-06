@@ -10,23 +10,31 @@
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
+html,
+body,
+#root {
+  width: 100%;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100%;
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
 }
 
 button {
   border: 1px solid #344054;
-  border-radius: 0.65rem;
+  border-radius: 0.55rem;
   background: #121823;
   color: inherit;
-  padding: 0.65rem 0.85rem;
+  padding: 0.6rem 0.75rem;
   cursor: pointer;
 }
 
 button:hover,
-button[aria-current="page"] {
+button[aria-pressed="true"] {
   border-color: #62d5c4;
   background: #17312f;
 }
@@ -44,86 +52,58 @@ button:disabled {
 
 .portal-shell {
   min-height: 100vh;
-  padding: clamp(0.8rem, 2vw, 1.5rem);
-}
-
-.topbar,
-.toolbar,
-.viewbar,
-.device-defaults {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  flex-wrap: wrap;
-}
-
-.topbar {
-  justify-content: space-between;
-}
-
-.eyebrow {
-  margin: 0 0 0.25rem;
-  color: #62d5c4;
-  font: 700 0.72rem ui-monospace, monospace;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-h1 {
-  margin: 0;
-  font-size: clamp(1.65rem, 4vw, 2.7rem);
-}
-
-.viewbar,
-.device-defaults {
-  margin-top: 1rem;
-}
-
-.device-defaults button {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.workspace-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
-  gap: 1rem;
-  align-items: start;
-  margin-top: 1rem;
 }
 
 .canvas {
-  --cell-size: clamp(24px, 4vw, 56px);
+  --cell-size: 32px;
   display: grid;
   grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
   grid-auto-rows: var(--cell-size);
   position: relative;
-  min-height: calc(100vh - 13rem);
+  width: 100%;
+  min-height: 100vh;
   overflow: auto;
-  border: 1px solid #283242;
-  border-radius: 1rem;
   background-color: #0c1119;
   isolation: isolate;
 }
 
+.portal-shell[data-surface="background"] .canvas {
+  background-color: #100e17;
+}
+
 .canvas[data-grid-visible="true"] {
   background-image:
-    linear-gradient(to right, rgb(98 213 196 / 0.11) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(98 213 196 / 0.11) 1px, transparent 1px);
+    linear-gradient(to right, rgb(98 213 196 / 0.12) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(98 213 196 / 0.12) 1px, transparent 1px);
   background-size: calc(100% / var(--grid-columns)) var(--cell-size);
+}
+
+.portal-shell[data-surface="background"] .canvas[data-grid-visible="true"] {
+  background-image:
+    linear-gradient(to right, rgb(184 130 255 / 0.12) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(184 130 255 / 0.12) 1px, transparent 1px);
 }
 
 .canvas-box {
   position: relative;
   min-width: 0;
   min-height: 0;
-  margin: 0.25rem;
-  padding: 1.35rem 0.7rem 0.7rem;
+  margin: 0.15rem;
   border: 1px solid #62d5c4;
-  border-radius: 0.8rem;
-  background: rgb(21 33 45 / 0.94);
-  box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.24);
+  border-radius: 0.6rem;
+  background: rgb(21 33 45 / 0.9);
+  box-shadow: 0 0.65rem 2rem rgb(0 0 0 / 0.22);
   transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.canvas-box[data-box-role="view"],
+.canvas-box[data-box-role="device"] {
+  background: rgb(19 43 42 / 0.92);
+}
+
+.portal-shell[data-surface="background"] .canvas-box {
+  border-color: #b882ff;
+  background: rgb(38 28 51 / 0.9);
 }
 
 .canvas-box[data-dragging="true"] {
@@ -133,20 +113,30 @@ h1 {
 }
 
 .box-name {
-  position: relative;
-  z-index: 1;
+  position: absolute;
+  z-index: 4;
+  top: 0.45rem;
+  left: 0.6rem;
+  right: 0.6rem;
   display: block;
   overflow: hidden;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 4px #000;
+}
+
+.portal-shell[data-names-visible="false"] .box-name {
+  display: none;
 }
 
 .box-children {
-  --child-cell-size: 1.5rem;
+  --child-cell-size: 24px;
   position: absolute;
-  inset: 2.5rem 0.35rem 0.35rem;
+  z-index: 1;
+  inset: 0.2rem;
   display: grid;
   grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
   grid-auto-rows: var(--child-cell-size);
@@ -154,11 +144,32 @@ h1 {
   min-height: var(--child-cell-size);
 }
 
-.handle {
+.system-box-action {
   position: absolute;
   z-index: 2;
-  width: 0.75rem;
-  height: 0.75rem;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: #8ef0df;
+}
+
+.system-box-action:hover,
+.system-box-action[aria-pressed="true"] {
+  border: 0;
+  background: rgb(98 213 196 / 0.1);
+}
+
+.handle {
+  position: absolute;
+  z-index: 5;
+  width: 0.7rem;
+  height: 0.7rem;
   min-width: 0;
   padding: 0;
   border: 1px solid #06100e;
@@ -168,85 +179,40 @@ h1 {
   user-select: none;
 }
 
+.portal-shell[data-handles-visible="false"] .handle {
+  display: none;
+}
+
 .handle-start {
-  left: -0.3rem;
-  top: -0.3rem;
+  left: -0.25rem;
+  top: -0.25rem;
 }
 
 .handle-move {
   left: 50%;
-  top: -0.3rem;
-  width: 2.5rem;
+  top: -0.25rem;
+  width: 2.2rem;
   border-radius: 1rem;
   transform: translateX(-50%);
 }
 
 .handle-end {
-  right: -0.3rem;
-  bottom: -0.3rem;
+  right: -0.25rem;
+  bottom: -0.25rem;
 }
 
-.empty-state {
-  grid-column: 1 / -1;
-  align-self: center;
-  justify-self: center;
-  color: #8c9aab;
-}
-
-.archive-panel {
-  position: sticky;
-  top: 1rem;
-  min-height: 10rem;
-  padding: 1rem;
-  border: 1px solid #283242;
-  border-radius: 1rem;
-  background: #0c1119;
-}
-
-.archive-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.archive-heading h2 {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.archive-heading span,
-.archive-panel p {
-  color: #8c9aab;
-  font-size: 0.8rem;
-}
-
-.archive-panel ul {
-  display: grid;
-  gap: 0.6rem;
-  margin: 1rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.archive-panel li {
-  display: grid;
-  gap: 0.45rem;
-  padding: 0.7rem;
-  border: 1px solid #283242;
-  border-radius: 0.7rem;
-  background: #101722;
-}
-
-.archive-panel li span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.archive-panel li button {
-  padding: 0.45rem 0.6rem;
-  font-size: 0.76rem;
+.surface-badge {
+  position: fixed;
+  z-index: 60;
+  top: 0.65rem;
+  right: 0.65rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid rgb(184 130 255 / 0.45);
+  border-radius: 999px;
+  background: rgb(24 18 32 / 0.86);
+  color: #d6b8ff;
+  font-size: 0.72rem;
+  pointer-events: none;
 }
 
 .context-backdrop {
@@ -259,11 +225,13 @@ h1 {
   position: fixed;
   z-index: 100;
   display: grid;
-  gap: 0.35rem;
-  width: 15rem;
-  padding: 0.5rem;
+  gap: 0.3rem;
+  width: min(16rem, calc(100vw - 1rem));
+  max-height: calc(100vh - 1rem);
+  overflow-y: auto;
+  padding: 0.45rem;
   border: 1px solid #3a485b;
-  border-radius: 0.8rem;
+  border-radius: 0.7rem;
   background: #111925;
   box-shadow: 0 1.2rem 3rem rgb(0 0 0 / 0.5);
 }
@@ -274,31 +242,36 @@ h1 {
   text-align: left;
 }
 
+.context-menu .surface-menu-item {
+  margin-bottom: 0.25rem;
+  border-color: #6c548f;
+}
+
 .context-menu form,
 .context-menu form label {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.5rem;
 }
 
 .context-menu input {
   width: 100%;
   border: 1px solid #3a485b;
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   background: #080d14;
   color: inherit;
-  padding: 0.65rem;
+  padding: 0.6rem;
 }
 
 .context-menu p {
-  margin: 0.25rem 0 0.75rem;
-  font-size: 0.9rem;
-  line-height: 1.45;
+  margin: 0.2rem 0 0.7rem;
+  font-size: 0.88rem;
+  line-height: 1.4;
 }
 
 .context-actions {
   display: flex;
-  gap: 0.4rem;
-  margin-top: 0.65rem;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
 }
 
 .context-actions button {
@@ -311,30 +284,11 @@ h1 {
 }
 
 @media (max-width: 640px) {
-  .topbar {
-    align-items: flex-start;
-  }
-
-  .toolbar {
-    width: 100%;
-  }
-
-  .toolbar button {
-    flex: 1 1 auto;
-  }
-
   .canvas {
-    min-height: calc(100vh - 17rem);
-  }
-}
-
-@media (max-width: 900px) {
-  .workspace-layout {
-    grid-template-columns: minmax(0, 1fr);
+    --cell-size: 28px;
   }
 
-  .archive-panel {
-    position: static;
-    min-height: auto;
+  .box-name {
+    font-size: 0.7rem;
   }
 }

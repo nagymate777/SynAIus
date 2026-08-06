@@ -1,5 +1,7 @@
 export type DeviceKind = "desktop" | "tablet" | "mobile";
 
+export type DeviceNames = Record<DeviceKind, string>;
+
 export interface GridRect {
   column: number;
   row: number;
@@ -17,14 +19,20 @@ export interface BoxStyle {
   scopedCss: string;
 }
 
+export type BoxRole =
+  | { type: "content" }
+  | { type: "view"; viewId: string }
+  | { type: "device"; device: DeviceKind };
+
 export interface BoxNode {
   id: string;
-  viewId: string;
+  viewId: string | null;
   parentId: string | null;
   name: string;
   rect: GridRect;
   childGrid: GridDefinition;
   style: BoxStyle;
+  role: BoxRole;
   archived: boolean;
 }
 
@@ -34,15 +42,30 @@ export interface WorkspaceView {
   grid: GridDefinition;
 }
 
+export interface WorkspacePreferences {
+  handlesVisible: boolean;
+  namesVisible: boolean;
+}
+
 export interface WorkspaceState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   revision: number;
   activeViewId: string;
   deviceDefaults: Partial<Record<DeviceKind, string>>;
   views: Record<string, WorkspaceView>;
   boxes: Record<string, BoxNode>;
+  preferences: WorkspacePreferences;
   globalStyle: BoxStyle;
+}
+
+export interface LegacyBoxNodeV1 extends Omit<BoxNode, "role" | "viewId"> {
+  viewId: string;
+}
+
+export interface LegacyWorkspaceStateV1 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "preferences"> {
+  schemaVersion: 1;
+  boxes: Record<string, LegacyBoxNodeV1>;
 }
 
 interface CommandEnvelope<TType extends string, TPayload> {
@@ -57,6 +80,8 @@ export type WorkspaceCommand =
   | CommandEnvelope<"view.activate", { viewId: string }>
   | CommandEnvelope<"view.setDeviceDefault", { device: DeviceKind; viewId: string }>
   | CommandEnvelope<"grid.visibility.set", { viewId: string; visible: boolean }>
+  | CommandEnvelope<"workspace.handles.set", { visible: boolean }>
+  | CommandEnvelope<"workspace.names.set", { visible: boolean }>
   | CommandEnvelope<"box.create", { boxId: string; viewId: string; parentId: string | null; name: string; rect: GridRect }>
   | CommandEnvelope<"box.rename", { boxId: string; name: string }>
   | CommandEnvelope<"box.move", { boxId: string; column: number; row: number }>
@@ -91,23 +116,95 @@ export function createWorkspace(input: {
   workspaceId: string;
   initialViewId: string;
   initialViewName: string;
+  deviceNames?: DeviceNames;
 }): WorkspaceState {
-  const name = normalizedName(input.initialViewName);
+  const workspaceId = requiredId(input.workspaceId);
+  const initialViewId = requiredId(input.initialViewId);
+  const initialViewName = normalizedName(input.initialViewName);
+  const deviceNames = input.deviceNames ?? {
+    desktop: "device.desktop",
+    tablet: "device.tablet",
+    mobile: "device.mobile",
+  };
+  const boxes: Record<string, BoxNode> = {};
+  const viewBox = createSystemBox({
+    id: systemViewBoxId(initialViewId),
+    name: initialViewName,
+    role: { type: "view", viewId: initialViewId },
+    rect: viewControlRect(0),
+  });
+  boxes[viewBox.id] = viewBox;
+  for (const [index, device] of (["desktop", "tablet", "mobile"] as const).entries()) {
+    const box = createSystemBox({
+      id: systemDeviceBoxId(device),
+      name: normalizedName(deviceNames[device]),
+      role: { type: "device", device },
+      rect: { column: 6 + index * 6, row: 0, width: 6, height: 2 },
+    });
+    boxes[box.id] = box;
+  }
   return {
-    schemaVersion: 1,
-    id: requiredId(input.workspaceId),
+    schemaVersion: 2,
+    id: workspaceId,
     revision: 0,
-    activeViewId: requiredId(input.initialViewId),
-    deviceDefaults: { desktop: input.initialViewId },
+    activeViewId: initialViewId,
+    deviceDefaults: { desktop: initialViewId },
     views: {
-      [input.initialViewId]: {
-        id: input.initialViewId,
-        name,
-        grid: { columns: 12, visible: false },
+      [initialViewId]: {
+        id: initialViewId,
+        name: initialViewName,
+        grid: { columns: 24, visible: false },
       },
     },
-    boxes: {},
+    boxes,
+    preferences: { handlesVisible: true, namesVisible: true },
     globalStyle: { declarations: {}, scopedCss: "" },
+  };
+}
+
+export function migrateWorkspaceV1(current: LegacyWorkspaceStateV1, deviceNames: DeviceNames): WorkspaceState {
+  const boxes: Record<string, BoxNode> = Object.fromEntries(
+    Object.values(current.boxes).map((box) => [box.id, {
+      ...structuredClone(box),
+      viewId: box.viewId,
+      rect: scaleRect(box.rect),
+      childGrid: { ...box.childGrid, columns: 24 },
+      role: { type: "content" } as const,
+    }]),
+  );
+  const views = Object.fromEntries(
+    Object.values(current.views).map((view) => [view.id, {
+      ...structuredClone(view),
+      grid: { ...view.grid, columns: 24 },
+    }]),
+  );
+
+  Object.values(views).forEach((view, index) => {
+    const id = availableSystemId(systemViewBoxId(view.id), boxes);
+    const name = availableBoxName(view.name, boxes);
+    boxes[id] = createSystemBox({ id, name, role: { type: "view", viewId: view.id }, rect: viewControlRect(index) });
+  });
+  (["desktop", "tablet", "mobile"] as const).forEach((device, index) => {
+    const id = availableSystemId(systemDeviceBoxId(device), boxes);
+    const name = availableBoxName(deviceNames[device], boxes);
+    boxes[id] = createSystemBox({
+      id,
+      name,
+      role: { type: "device", device },
+      rect: { column: 6 + index * 6, row: 0, width: 6, height: 2 },
+    });
+  });
+
+  return {
+    schemaVersion: 2,
+    id: current.id,
+    revision: current.revision,
+    activeViewId: current.activeViewId,
+    deviceDefaults: structuredClone(current.deviceDefaults),
+    views,
+    boxes,
+    preferences: { handlesVisible: true, namesVisible: true },
+    globalStyle: structuredClone(current.globalStyle),
   };
 }
 
@@ -121,11 +218,22 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       requiredId(command.payload.viewId);
       if (state.views[command.payload.viewId]) throw new DomainError("view.id.duplicate");
       assertUniqueViewName(state, command.payload.name);
+      const boxId = systemViewBoxId(command.payload.viewId);
+      if (state.boxes[boxId]) throw new DomainError("box.id.duplicate");
+      assertUniqueBoxName(state, command.payload.name);
+      const viewIndex = Object.keys(state.views).length;
+      const name = normalizedName(command.payload.name);
       state.views[command.payload.viewId] = {
         id: command.payload.viewId,
-        name: normalizedName(command.payload.name),
-        grid: { columns: 12, visible: false },
+        name,
+        grid: { columns: 24, visible: false },
       };
+      state.boxes[boxId] = createSystemBox({
+        id: boxId,
+        name,
+        role: { type: "view", viewId: command.payload.viewId },
+        rect: viewControlRect(viewIndex),
+      });
       break;
     }
     case "view.activate": {
@@ -142,12 +250,20 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       requireView(state, command.payload.viewId).grid.visible = command.payload.visible;
       break;
     }
+    case "workspace.handles.set": {
+      state.preferences.handlesVisible = command.payload.visible;
+      break;
+    }
+    case "workspace.names.set": {
+      state.preferences.namesVisible = command.payload.visible;
+      break;
+    }
     case "box.create": {
       requiredId(command.payload.boxId);
       if (state.boxes[command.payload.boxId]) throw new DomainError("box.id.duplicate");
       const view = requireView(state, command.payload.viewId);
       assertUniqueBoxName(state, command.payload.name);
-      const parent = command.payload.parentId ? requireActiveBox(state, command.payload.parentId) : null;
+      const parent = command.payload.parentId ? requireSurfaceBox(state, command.payload.parentId, false) : null;
       if (parent && parent.viewId !== view.id) throw new DomainError("box.parent.viewMismatch");
       assertRect(command.payload.rect, parent?.childGrid.columns ?? view.grid.columns);
       state.boxes[command.payload.boxId] = {
@@ -156,8 +272,9 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         parentId: parent?.id ?? null,
         name: normalizedName(command.payload.name),
         rect: { ...command.payload.rect },
-        childGrid: { columns: 12, visible: false },
+        childGrid: { columns: 24, visible: false },
         style: { declarations: {}, scopedCss: "" },
+        role: { type: "content" },
         archived: false,
       };
       break;
@@ -165,11 +282,15 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
     case "box.rename": {
       const box = requireBox(state, command.payload.boxId);
       assertUniqueBoxName(state, command.payload.name, box.id);
+      if (box.role.type === "view") {
+        assertUniqueViewName(state, command.payload.name, box.role.viewId);
+        requireView(state, box.role.viewId).name = normalizedName(command.payload.name);
+      }
       box.name = normalizedName(command.payload.name);
       break;
     }
     case "box.move": {
-      const box = requireActiveBox(state, command.payload.boxId);
+      const box = requireBox(state, command.payload.boxId);
       const columns = parentColumns(state, box);
       const rect = { ...box.rect, column: command.payload.column, row: command.payload.row };
       assertRect(rect, columns);
@@ -177,39 +298,42 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       break;
     }
     case "box.resize": {
-      const box = requireActiveBox(state, command.payload.boxId);
+      const box = requireBox(state, command.payload.boxId);
       assertRect(command.payload.rect, parentColumns(state, box));
       box.rect = { ...command.payload.rect };
       break;
     }
     case "box.nest": {
-      const box = requireActiveBox(state, command.payload.boxId);
-      const parent = command.payload.parentId ? requireActiveBox(state, command.payload.parentId) : null;
-      if (parent?.viewId !== undefined && parent.viewId !== box.viewId) throw new DomainError("box.parent.viewMismatch");
+      const box = requireBox(state, command.payload.boxId);
+      const parent = command.payload.parentId ? requireSurfaceBox(state, command.payload.parentId, box.archived) : null;
+      if (parent && parent.viewId !== box.viewId) throw new DomainError("box.parent.viewMismatch");
       if (parent && (parent.id === box.id || isDescendant(state, parent.id, box.id))) throw new DomainError("box.parent.cycle");
-      const columns = parent?.childGrid.columns ?? requireView(state, box.viewId).grid.columns;
+      const columns = parent?.childGrid.columns ?? rootColumns(state, box);
       assertRect(command.payload.rect, columns);
       box.parentId = parent?.id ?? null;
       box.rect = { ...command.payload.rect };
       break;
     }
     case "box.archive": {
-      requireActiveBox(state, command.payload.boxId).archived = true;
+      const box = requireSurfaceBox(state, command.payload.boxId, false);
+      if (box.parentId && !requireBox(state, box.parentId).archived) box.parentId = null;
+      setArchivedForSubtree(state, box.id, true);
       break;
     }
     case "box.restore": {
-      const box = requireBox(state, command.payload.boxId);
-      const parent = command.payload.parentId ? requireActiveBox(state, command.payload.parentId) : null;
+      const box = requireSurfaceBox(state, command.payload.boxId, true);
+      const parent = command.payload.parentId ? requireSurfaceBox(state, command.payload.parentId, false) : null;
       if (parent && parent.viewId !== box.viewId) throw new DomainError("box.parent.viewMismatch");
       if (parent && (parent.id === box.id || isDescendant(state, parent.id, box.id))) throw new DomainError("box.parent.cycle");
-      assertRect(command.payload.rect, parent?.childGrid.columns ?? requireView(state, box.viewId).grid.columns);
+      assertRect(command.payload.rect, parent?.childGrid.columns ?? rootColumns(state, box));
       box.parentId = parent?.id ?? null;
       box.rect = { ...command.payload.rect };
-      box.archived = false;
+      setArchivedForSubtree(state, box.id, false);
       break;
     }
     case "box.delete": {
       const box = requireBox(state, command.payload.boxId);
+      if (box.role.type !== "content") throw new DomainError("box.delete.protected");
       if (Object.values(state.boxes).some((candidate) => candidate.parentId === box.id)) {
         throw new DomainError("box.delete.hasChildren");
       }
@@ -241,6 +365,58 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
   };
 }
 
+export function isProtectedBox(box: BoxNode) {
+  return box.role.type !== "content";
+}
+
+function createSystemBox(input: { id: string; name: string; role: Exclude<BoxRole, { type: "content" }>; rect: GridRect }): BoxNode {
+  return {
+    id: input.id,
+    viewId: null,
+    parentId: null,
+    name: input.name,
+    rect: input.rect,
+    childGrid: { columns: 24, visible: false },
+    style: { declarations: {}, scopedCss: "" },
+    role: input.role,
+    archived: false,
+  };
+}
+
+function systemViewBoxId(viewId: string) {
+  return `system:view:${viewId}`;
+}
+
+function systemDeviceBoxId(device: DeviceKind) {
+  return `system:device:${device}`;
+}
+
+function viewControlRect(index: number): GridRect {
+  if (index === 0) return { column: 0, row: 0, width: 6, height: 2 };
+  const offset = index - 1;
+  return { column: (offset % 4) * 6, row: 2 + Math.floor(offset / 4) * 2, width: 6, height: 2 };
+}
+
+function scaleRect(rect: GridRect): GridRect {
+  return { column: rect.column * 2, row: rect.row * 2, width: rect.width * 2, height: rect.height * 2 };
+}
+
+function availableSystemId(preferred: string, boxes: Record<string, BoxNode>) {
+  let candidate = preferred;
+  let suffix = 2;
+  while (boxes[candidate]) candidate = `${preferred}:${suffix++}`;
+  return candidate;
+}
+
+function availableBoxName(preferred: string, boxes: Record<string, BoxNode>) {
+  const normalized = normalizedName(preferred);
+  const occupied = new Set(Object.values(boxes).map((box) => canonicalName(box.name)));
+  if (!occupied.has(canonicalName(normalized))) return normalized;
+  let suffix = 2;
+  while (occupied.has(canonicalName(`${normalized} ${suffix}`))) suffix += 1;
+  return `${normalized} ${suffix}`;
+}
+
 function requiredId(value: string) {
   const id = value.trim();
   if (!id) throw new DomainError("id.required");
@@ -269,15 +445,15 @@ function requireBox(state: WorkspaceState, boxId: string) {
   return box;
 }
 
-function requireActiveBox(state: WorkspaceState, boxId: string) {
+function requireSurfaceBox(state: WorkspaceState, boxId: string, archived: boolean) {
   const box = requireBox(state, boxId);
-  if (box.archived) throw new DomainError("box.archived");
+  if (box.archived !== archived) throw new DomainError(archived ? "box.notArchived" : "box.archived");
   return box;
 }
 
-function assertUniqueViewName(state: WorkspaceState, name: string) {
+function assertUniqueViewName(state: WorkspaceState, name: string, exceptId: string | null = null) {
   const candidate = canonicalName(name);
-  if (Object.values(state.views).some((view) => canonicalName(view.name) === candidate)) {
+  if (Object.values(state.views).some((view) => view.id !== exceptId && canonicalName(view.name) === candidate)) {
     throw new DomainError("view.name.duplicate");
   }
 }
@@ -297,9 +473,11 @@ function assertRect(rect: GridRect, columns: number) {
 }
 
 function parentColumns(state: WorkspaceState, box: BoxNode) {
-  return box.parentId
-    ? requireActiveBox(state, box.parentId).childGrid.columns
-    : requireView(state, box.viewId).grid.columns;
+  return box.parentId ? requireBox(state, box.parentId).childGrid.columns : rootColumns(state, box);
+}
+
+function rootColumns(state: WorkspaceState, box: BoxNode) {
+  return box.viewId ? requireView(state, box.viewId).grid.columns : requireView(state, state.activeViewId).grid.columns;
 }
 
 function isDescendant(state: WorkspaceState, candidateId: string, ancestorId: string) {
@@ -309,4 +487,11 @@ function isDescendant(state: WorkspaceState, candidateId: string, ancestorId: st
     current = state.boxes[current.parentId];
   }
   return false;
+}
+
+function setArchivedForSubtree(state: WorkspaceState, boxId: string, archived: boolean) {
+  requireBox(state, boxId).archived = archived;
+  Object.values(state.boxes)
+    .filter((box) => box.parentId === boxId)
+    .forEach((box) => setArchivedForSubtree(state, box.id, archived));
 }

@@ -21,6 +21,19 @@ function withTwoBoxes() {
 }
 
 describe("workspace command core", () => {
+  it("creates protected global view and device control boxes on the dense grid", () => {
+    const state = initial();
+    const systemBoxes = Object.values(state.boxes).filter((box) => box.role.type !== "content");
+    expect(state.schemaVersion).toBe(2);
+    expect(state.views.main.grid.columns).toBe(24);
+    expect(systemBoxes).toHaveLength(4);
+    expect(systemBoxes.every((box) => box.viewId === null)).toBe(true);
+    expect(() => apply(state, {
+      type: "box.delete",
+      payload: { boxId: systemBoxes[0].id },
+    })).toThrowError(new DomainError("box.delete.protected"));
+  });
+
   it("uses optimistic revisions and immutable state", () => {
     const before = initial();
     const result = applyWorkspaceCommand(before, {
@@ -82,11 +95,39 @@ describe("workspace command core", () => {
     expect(state.boxes.child.style.declarations.color).toBe("#fff");
   });
 
+  it("moves an entire nested subtree between the main and background surfaces", () => {
+    let state = withTwoBoxes();
+    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", rect: { column: 2, row: 1, width: 4, height: 3 } } });
+    state = apply(state, { type: "box.archive", payload: { boxId: "parent" } });
+    expect(state.boxes.parent.archived).toBe(true);
+    expect(state.boxes.child.archived).toBe(true);
+    state = apply(state, { type: "box.move", payload: { boxId: "parent", column: 4, row: 5 } });
+    state = apply(state, { type: "box.restore", payload: { boxId: "parent", parentId: null, rect: state.boxes.parent.rect } });
+    expect(state.boxes.parent.archived).toBe(false);
+    expect(state.boxes.child.archived).toBe(false);
+  });
+
   it("records a default view for each device kind", () => {
     let state = initial();
     state = apply(state, { type: "view.create", payload: { viewId: "mobile", name: "Mobil" } });
     state = apply(state, { type: "view.setDeviceDefault", payload: { device: "mobile", viewId: "mobile" } });
     expect(state.deviceDefaults.mobile).toBe("mobile");
+  });
+
+  it("stores handle and box-name visibility through commands", () => {
+    let state = initial();
+    state = apply(state, { type: "workspace.handles.set", payload: { visible: false } });
+    state = apply(state, { type: "workspace.names.set", payload: { visible: false } });
+    expect(state.preferences).toEqual({ handlesVisible: false, namesVisible: false });
+  });
+
+  it("keeps a view control box synchronized when it is renamed", () => {
+    let state = initial();
+    const viewBox = Object.values(state.boxes).find((box) => box.role.type === "view");
+    expect(viewBox).toBeDefined();
+    state = apply(state, { type: "box.rename", payload: { boxId: viewBox!.id, name: "Kezdőlap" } });
+    expect(state.views.main.name).toBe("Kezdőlap");
+    expect(state.boxes[viewBox!.id].name).toBe("Kezdőlap");
   });
 
   it("deletes only leaf boxes so a subtree cannot disappear implicitly", () => {

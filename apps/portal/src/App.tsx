@@ -8,9 +8,11 @@ import type {
 import {
   applyWorkspaceCommand,
   createWorkspace,
+  isProtectedBox,
   type BoxNode,
   type CommandPayload,
   type DeviceKind,
+  type DeviceNames,
   type GridRect,
   type WorkspaceCommand,
   type WorkspaceState,
@@ -31,9 +33,15 @@ import {
 import { loadWorkspace, saveWorkspace } from "./workspace-storage";
 
 const t = createTranslator(hu);
+const deviceNames: DeviceNames = {
+  desktop: t("device.desktop"),
+  tablet: t("device.tablet"),
+  mobile: t("device.mobile"),
+};
 
 type DragMode = "move" | "resize-start" | "resize-end";
 type ContextMode = "actions" | "rename" | "delete";
+type Surface = "main" | "background";
 
 interface DragState {
   boxId: string;
@@ -59,6 +67,7 @@ type GridStyle = CSSProperties & { "--grid-columns": number };
 
 export function App() {
   const [workspace, setWorkspace] = useState(createInitialWorkspace);
+  const [surface, setSurface] = useState<Surface>("main");
   const [drag, setDrag] = useState<DragState | null>(null);
   const [context, setContext] = useState<ContextState | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -125,17 +134,16 @@ export function App() {
   }
 
   const activeView = workspace.views[workspace.activeViewId];
-  const activeBoxes = useMemo(
-    () => Object.values(workspace.boxes).filter((box) => box.viewId === activeView.id && !box.archived),
-    [activeView.id, workspace.boxes],
+  const surfaceArchived = surface === "background";
+  const surfaceBoxes = useMemo(
+    () => Object.values(workspace.boxes).filter((box) =>
+      (box.viewId === null || box.viewId === activeView.id) && box.archived === surfaceArchived),
+    [activeView.id, surfaceArchived, workspace.boxes],
   );
+  const surfaceBoxIds = useMemo(() => new Set(surfaceBoxes.map((box) => box.id)), [surfaceBoxes]);
   const visibleRootBoxes = useMemo(
-    () => activeBoxes.filter((box) => box.parentId === null),
-    [activeBoxes],
-  );
-  const archivedBoxes = useMemo(
-    () => Object.values(workspace.boxes).filter((box) => box.viewId === activeView.id && box.archived),
-    [activeView.id, workspace.boxes],
+    () => surfaceBoxes.filter((box) => box.parentId === null || !surfaceBoxIds.has(box.parentId)),
+    [surfaceBoxes, surfaceBoxIds],
   );
   const contextBox = context?.boxId ? workspace.boxes[context.boxId] : null;
   const contextBoxHasChildren = contextBox
@@ -159,6 +167,7 @@ export function App() {
         payload: { viewId },
       }).state;
     });
+    setContext(null);
   }
 
   function addBox(parentId: string | null = null, point?: GridPoint) {
@@ -167,9 +176,10 @@ export function App() {
       const parent = parentId ? current.boxes[parentId] : null;
       const columns = parent?.childGrid.columns ?? view.grid.columns;
       const occupiedNames = Object.values(current.boxes).map((box) => box.name);
+      const contentCount = Object.values(current.boxes).filter((box) => box.role.type === "content").length;
       const fallbackPoint = {
-        column: Object.keys(current.boxes).length % Math.max(1, columns - 2),
-        row: Math.floor(Object.keys(current.boxes).length / 4) * 3,
+        column: contentCount % Math.max(1, columns - 5),
+        row: 3 + Math.floor(contentCount / 4) * 4,
       };
       return applyWorkspaceCommand(current, {
         id: crypto.randomUUID(),
@@ -180,15 +190,11 @@ export function App() {
           viewId: view.id,
           parentId,
           name: nextAvailableName("box.generatedName", occupiedNames),
-          rect: rectAtPoint(point ?? fallbackPoint, 3, 3, columns),
+          rect: rectAtPoint(point ?? fallbackPoint, 6, 4, columns),
         },
       }).state;
     });
     setContext(null);
-  }
-
-  function setDeviceDefault(device: DeviceKind) {
-    send("view.setDeviceDefault", { device, viewId: activeView.id });
   }
 
   function openCanvasContext(event: ReactMouseEvent<HTMLElement>) {
@@ -225,6 +231,11 @@ export function App() {
     );
     if (!name || duplicate) return;
     send("box.rename", { boxId: contextBox.id, name });
+    setContext(null);
+  }
+
+  function switchSurface(nextSurface: Surface) {
+    setSurface(nextSurface);
     setContext(null);
   }
 
@@ -285,7 +296,7 @@ export function App() {
       return;
     }
 
-    const targetParentId = findDropParentId(currentWorkspace, box.id, clientX, clientY);
+    const targetParentId = findDropParentId(currentWorkspace, box, clientX, clientY);
     if (targetParentId && targetParentId !== box.parentId) {
       const targetParent = currentWorkspace.boxes[targetParentId];
       const targetGrid = findGridElement(targetParentId);
@@ -333,25 +344,42 @@ export function App() {
     setDrag(null);
   }
 
-  function findDropParentId(currentWorkspace: WorkspaceState, boxId: string, clientX: number, clientY: number) {
-    const forbidden = new Set([boxId, ...descendantIds(currentWorkspace, boxId)]);
+  function findDropParentId(currentWorkspace: WorkspaceState, box: BoxNode, clientX: number, clientY: number) {
+    const forbidden = new Set([box.id, ...descendantIds(currentWorkspace, box.id)]);
     for (const element of document.elementsFromPoint(clientX, clientY)) {
       const candidate = element.closest<HTMLElement>("[data-box-id]");
       const candidateId = candidate?.dataset.boxId;
-      if (candidateId && !forbidden.has(candidateId) && currentWorkspace.boxes[candidateId] && !currentWorkspace.boxes[candidateId].archived) {
-        return candidateId;
-      }
+      const target = candidateId ? currentWorkspace.boxes[candidateId] : null;
+      if (target
+        && !forbidden.has(target.id)
+        && target.role.type === "content"
+        && target.viewId === box.viewId
+        && target.archived === box.archived) return target.id;
     }
     return null;
   }
 
+  function activateSystemBox(box: BoxNode) {
+    if (box.role.type === "view") send("view.activate", { viewId: box.role.viewId });
+    if (box.role.type === "device") {
+      send("view.setDeviceDefault", { device: box.role.device, viewId: activeView.id });
+    }
+  }
+
+  function systemBoxSelected(box: BoxNode) {
+    if (box.role.type === "view") return box.role.viewId === activeView.id;
+    if (box.role.type === "device") return workspace.deviceDefaults[box.role.device] === activeView.id;
+    return false;
+  }
+
   function renderBox(box: BoxNode) {
-    const children = activeBoxes.filter((candidate) => candidate.parentId === box.id);
+    const children = surfaceBoxes.filter((candidate) => candidate.parentId === box.id);
     const renderedRect = drag?.boxId === box.id ? drag.previewRect : box.rect;
     return (
       <article
         className="canvas-box"
         data-box-id={box.id}
+        data-box-role={box.role.type}
         data-dragging={drag?.boxId === box.id}
         key={box.id}
         onContextMenu={(event) => openBoxContext(event, box)}
@@ -372,6 +400,16 @@ export function App() {
           onPointerDown={(event) => beginDrag(event, box, "move")}
         />
         <strong className="box-name">{box.name}</strong>
+        {box.role.type !== "content" && (
+          <button
+            className="system-box-action"
+            aria-label={box.name}
+            aria-pressed={systemBoxSelected(box)}
+            onClick={() => activateSystemBox(box)}
+          >
+            <span aria-hidden="true">{systemBoxSelected(box) ? "●" : "○"}</span>
+          </button>
+        )}
         <div
           className="box-children"
           data-child-grid={box.id}
@@ -389,79 +427,24 @@ export function App() {
   }
 
   return (
-    <main className="portal-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">{t("app.stage")}</p>
-          <h1>{t("app.title")}</h1>
-        </div>
-        <div className="toolbar">
-          <button onClick={addView}>{t("action.addView")}</button>
-          <button onClick={() => addBox()}>{t("action.addBox")}</button>
-          <button
-            aria-pressed={activeView.grid.visible}
-            onClick={() => send("grid.visibility.set", { viewId: activeView.id, visible: !activeView.grid.visible })}
-          >
-            {t(activeView.grid.visible ? "action.hideGrid" : "action.showGrid")}
-          </button>
-        </div>
-      </header>
-
-      <nav className="viewbar" aria-label={t("view.navigationLabel")}>
-        {Object.values(workspace.views).map((view) => (
-          <button
-            aria-current={view.id === activeView.id ? "page" : undefined}
-            key={view.id}
-            onClick={() => send("view.activate", { viewId: view.id })}
-          >
-            {view.name}
-          </button>
-        ))}
-      </nav>
-
-      <section className="device-defaults" aria-label={t("device.defaultsLabel")}>
-        {(["desktop", "tablet", "mobile"] as const).map((device) => (
-          <button key={device} onClick={() => setDeviceDefault(device)}>
-            {t(`device.${device}`)}
-            <span aria-hidden="true">{workspace.deviceDefaults[device] === activeView.id ? "●" : "○"}</span>
-          </button>
-        ))}
+    <main
+      className="portal-shell"
+      data-handles-visible={workspace.preferences.handlesVisible}
+      data-names-visible={workspace.preferences.namesVisible}
+      data-surface={surface}
+    >
+      <section
+        className="canvas"
+        data-grid-visible={activeView.grid.visible}
+        style={{ "--grid-columns": activeView.grid.columns } as GridStyle}
+        aria-label={t(surface === "main" ? "canvas.label" : "surface.backgroundLabel")}
+        onContextMenu={openCanvasContext}
+        ref={canvasRef}
+      >
+        {visibleRootBoxes.map(renderBox)}
       </section>
 
-      <div className="workspace-layout">
-        <section
-          className="canvas"
-          data-grid-visible={activeView.grid.visible}
-          style={{ "--grid-columns": activeView.grid.columns } as GridStyle}
-          aria-label={t("canvas.label")}
-          onContextMenu={openCanvasContext}
-          ref={canvasRef}
-        >
-          {visibleRootBoxes.map(renderBox)}
-          {visibleRootBoxes.length === 0 && <p className="empty-state">{t("canvas.empty")}</p>}
-        </section>
-
-        <aside className="archive-panel" aria-label={t("archive.label")}>
-          <div className="archive-heading">
-            <h2>{t("archive.title")}</h2>
-            <span>{t("archive.count", { count: archivedBoxes.length })}</span>
-          </div>
-          {archivedBoxes.length === 0 ? (
-            <p>{t("archive.empty")}</p>
-          ) : (
-            <ul>
-              {archivedBoxes.map((box) => (
-                <li key={box.id}>
-                  <span>{box.name}</span>
-                  <button onClick={() => send("box.restore", { boxId: box.id, parentId: null, rect: box.rect })}>
-                    {t("action.restoreBox")}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
-      </div>
+      {surface === "background" && <div className="surface-badge">{t("surface.background")}</div>}
 
       {context && (
         <>
@@ -474,31 +457,89 @@ export function App() {
           >
             {context.mode === "actions" && (
               <>
-                <button role="menuitem" onClick={() => addBox(context.boxId, context.boxId ? { column: 0, row: 0 } : context.point)}>
-                  {t(context.boxId ? "context.addInside" : "action.addBox")}
+                {surface === "main" && (
+                  <button
+                    role="menuitem"
+                    onClick={() => addBox(
+                      contextBox?.role.type === "content" ? contextBox.id : null,
+                      contextBox?.role.type === "content" ? { column: 0, row: 0 } : context.point,
+                    )}
+                  >
+                    {t(contextBox?.role.type === "content" ? "context.addInside" : "action.addBox")}
+                  </button>
+                )}
+                <button role="menuitem" onClick={addView}>{t("action.addView")}</button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    send("grid.visibility.set", { viewId: activeView.id, visible: !activeView.grid.visible });
+                    setContext(null);
+                  }}
+                >
+                  {t(activeView.grid.visible ? "action.hideGrid" : "action.showGrid")}
                 </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    send("workspace.handles.set", { visible: !workspace.preferences.handlesVisible });
+                    setContext(null);
+                  }}
+                >
+                  {t(workspace.preferences.handlesVisible ? "action.hideHandles" : "action.showHandles")}
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    send("workspace.names.set", { visible: !workspace.preferences.namesVisible });
+                    setContext(null);
+                  }}
+                >
+                  {t(workspace.preferences.namesVisible ? "action.hideNames" : "action.showNames")}
+                </button>
+                <button
+                  className="surface-menu-item"
+                  role="menuitem"
+                  onClick={() => switchSurface(surface === "main" ? "background" : "main")}
+                >
+                  {t(surface === "main" ? "action.openBackground" : "action.openMain")}
+                </button>
+
                 {contextBox && (
                   <>
                     <button role="menuitem" onClick={() => setContext({ ...context, mode: "rename" })}>
                       {t("action.renameBox")}
                     </button>
-                    <button
-                      role="menuitem"
-                      onClick={() => {
-                        send("box.archive", { boxId: contextBox.id });
-                        setContext(null);
-                      }}
-                    >
-                      {t("action.archiveBox")}
-                    </button>
-                    <button
-                      role="menuitem"
-                      disabled={contextBoxHasChildren}
-                      title={contextBoxHasChildren ? t("box.delete.hasChildren") : undefined}
-                      onClick={() => setContext({ ...context, mode: "delete" })}
-                    >
-                      {t("action.deleteBox")}
-                    </button>
+                    {surface === "main" ? (
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          send("box.archive", { boxId: contextBox.id });
+                          setContext(null);
+                        }}
+                      >
+                        {t("action.archiveBox")}
+                      </button>
+                    ) : (
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          send("box.restore", { boxId: contextBox.id, parentId: null, rect: contextBox.rect });
+                          setContext(null);
+                        }}
+                      >
+                        {t("action.restoreBox")}
+                      </button>
+                    )}
+                    {!isProtectedBox(contextBox) && (
+                      <button
+                        role="menuitem"
+                        disabled={contextBoxHasChildren}
+                        title={contextBoxHasChildren ? t("box.delete.hasChildren") : undefined}
+                        onClick={() => setContext({ ...context, mode: "delete" })}
+                      >
+                        {t("action.deleteBox")}
+                      </button>
+                    )}
                   </>
                 )}
               </>
@@ -520,7 +561,7 @@ export function App() {
               </form>
             )}
 
-            {context.mode === "delete" && contextBox && (
+            {context.mode === "delete" && contextBox && !isProtectedBox(contextBox) && (
               <div>
                 <p>{t("box.delete.confirm", { name: contextBox.name })}</p>
                 <div className="context-actions">
@@ -549,8 +590,9 @@ function createInitialWorkspace() {
     workspaceId: "workspace-main",
     initialViewId: "view-main",
     initialViewName: t("view.defaultName"),
+    deviceNames,
   });
-  const workspace = loadWorkspace(fallback);
+  const workspace = loadWorkspace(fallback, deviceNames);
   const defaultViewId = workspace.deviceDefaults[deviceKindForWidth(window.innerWidth)];
   if (!defaultViewId || !workspace.views[defaultViewId] || defaultViewId === workspace.activeViewId) return workspace;
   return applyWorkspaceCommand(workspace, {
@@ -576,8 +618,8 @@ function nextAvailableName(key: string, occupiedNames: string[]) {
 
 function menuPosition(clientX: number, clientY: number) {
   return {
-    x: Math.max(8, Math.min(clientX, window.innerWidth - 248)),
-    y: Math.max(8, Math.min(clientY, window.innerHeight - 248)),
+    x: Math.max(8, Math.min(clientX, window.innerWidth - 264)),
+    y: Math.max(8, Math.min(clientY, window.innerHeight - 420)),
   };
 }
 
