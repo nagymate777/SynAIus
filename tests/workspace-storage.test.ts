@@ -3,10 +3,17 @@ import {
   createWorkspace,
   migrateWorkspaceV1,
   migrateWorkspaceV2,
+  migrateWorkspaceV3,
   type LegacyWorkspaceStateV1,
   type LegacyWorkspaceStateV2,
+  type LegacyWorkspaceStateV3,
 } from "@synaius/domain";
-import { isLegacyWorkspaceState, isLegacyWorkspaceStateV2, isWorkspaceState } from "../apps/portal/src/workspace-storage";
+import {
+  isLegacyWorkspaceState,
+  isLegacyWorkspaceStateV2,
+  isLegacyWorkspaceStateV3,
+  isWorkspaceState,
+} from "../apps/portal/src/workspace-storage";
 
 describe("workspace storage validation", () => {
   it("accepts the current schema and rejects broken references", () => {
@@ -71,7 +78,7 @@ describe("workspace storage validation", () => {
     };
     expect(isLegacyWorkspaceStateV2(previous)).toBe(true);
     const migrated = migrateWorkspaceV2(previous, "tablet");
-    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.schemaVersion).toBe(4);
     expect(migrated.activeLayout).toBe("tablet");
     expect(migrated.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(migrated.boxes.content.layoutRects).toEqual({
@@ -79,5 +86,23 @@ describe("workspace storage validation", () => {
       tablet: previous.boxes.content.rect,
       mobile: previous.boxes.content.rect,
     });
+  });
+
+  it("adds stable localization keys while migrating version three", () => {
+    const current = createWorkspace({ workspaceId: "workspace", initialViewId: "main", initialViewName: "Alapnézet" });
+    const { schemaVersion: _schemaVersion, localeMessages: _localeMessages, boxes: currentBoxes, ...base } = current;
+    const previous: LegacyWorkspaceStateV3 = {
+      ...base,
+      schemaVersion: 3,
+      boxes: Object.fromEntries(Object.values(currentBoxes).map((box) => {
+        const { labelKey: _labelKey, ...legacyBox } = box;
+        return [box.id, legacyBox];
+      })),
+    };
+    expect(isLegacyWorkspaceStateV3(previous)).toBe(true);
+    const migrated = migrateWorkspaceV3(previous);
+    const systemBoxes = Object.values(migrated.boxes).filter((box) => box.role.type !== "content");
+    expect(migrated.schemaVersion).toBe(4);
+    expect(systemBoxes.every((box) => box.labelKey && migrated.localeMessages[box.labelKey] === box.name)).toBe(true);
   });
 });

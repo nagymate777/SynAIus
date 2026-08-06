@@ -40,7 +40,7 @@ const deviceNames: DeviceNames = {
 };
 
 type DragMode = "move" | "resize-start" | "resize-end";
-type ContextMode = "actions" | "rename" | "delete";
+type ContextMode = "actions" | "rename" | "label" | "delete";
 type Surface = "main" | "background";
 
 interface DragState {
@@ -61,6 +61,7 @@ interface ContextState {
   y: number;
   mode: ContextMode;
   draftName: string;
+  draftLabel: string;
 }
 
 type GridStyle = CSSProperties & { "--grid-columns": number };
@@ -71,6 +72,7 @@ export function App() {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [context, setContext] = useState<ContextState | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const suppressSystemClickRef = useRef(false);
   const canvasRef = useRef<HTMLElement | null>(null);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
@@ -207,6 +209,7 @@ export function App() {
       ...menuPosition(event.clientX, event.clientY),
       mode: "actions",
       draftName: "",
+      draftLabel: "",
     });
   }
 
@@ -219,6 +222,7 @@ export function App() {
       ...menuPosition(event.clientX, event.clientY),
       mode: "actions",
       draftName: box.name,
+      draftLabel: localizedBoxLabel(workspace, box),
     });
   }
 
@@ -234,12 +238,30 @@ export function App() {
     setContext(null);
   }
 
+  function editBoxLabel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!contextBox?.labelKey) return;
+    const value = context?.draftLabel.trim() ?? "";
+    if (!value) return;
+    send("localization.message.set", { key: contextBox.labelKey, value });
+    setContext(null);
+  }
+
   function switchSurface(nextSurface: Surface) {
     setSurface(nextSurface);
     setContext(null);
   }
 
-  function beginDrag(event: ReactPointerEvent<HTMLButtonElement>, box: BoxNode, mode: DragMode) {
+  function beginBoxMove(event: ReactPointerEvent<HTMLElement>, box: BoxNode) {
+    if (!workspace.preferences.handlesVisible) return;
+    const target = event.target as HTMLElement;
+    if (target.closest(".handle")) return;
+    const interactive = target.closest("button, input, textarea, select, a, [contenteditable='true']");
+    if (interactive && !target.closest(".system-box-action")) return;
+    beginDrag(event, box, "move");
+  }
+
+  function beginDrag(event: ReactPointerEvent<HTMLElement>, box: BoxNode, mode: DragMode) {
     if (event.button !== 0) return;
     const grid = findGridElement(box.parentId);
     if (!grid) return;
@@ -294,6 +316,14 @@ export function App() {
     if (!box) return;
     const layout = currentWorkspace.activeLayout;
     const boxRect = box.layoutRects[layout];
+    const changed = !sameRect(current.startRect, current.previewRect);
+    if (current.mode === "move" && !changed) return;
+    if (current.mode === "move") {
+      suppressSystemClickRef.current = true;
+      window.setTimeout(() => {
+        suppressSystemClickRef.current = false;
+      }, 0);
+    }
     if (current.mode !== "move") {
       send("box.resize", { boxId: box.id, layout, rect: current.previewRect });
       return;
@@ -379,6 +409,7 @@ export function App() {
   function renderBox(box: BoxNode) {
     const children = surfaceBoxes.filter((candidate) => candidate.parentId === box.id);
     const renderedRect = drag?.boxId === box.id ? drag.previewRect : box.layoutRects[workspace.activeLayout];
+    const label = localizedBoxLabel(workspace, box);
     return (
       <article
         className="canvas-box"
@@ -387,6 +418,7 @@ export function App() {
         data-dragging={drag?.boxId === box.id}
         key={box.id}
         onContextMenu={(event) => openBoxContext(event, box)}
+        onPointerDown={(event) => beginBoxMove(event, box)}
         style={{
           gridColumn: `${renderedRect.column + 1} / span ${renderedRect.width}`,
           gridRow: `${renderedRect.row + 1} / span ${renderedRect.height}`,
@@ -398,20 +430,20 @@ export function App() {
           aria-label={t("box.handle.start")}
           onPointerDown={(event) => beginDrag(event, box, "resize-start")}
         />
-        <button
-          className="handle handle-move"
-          aria-label={t("box.handle.move")}
-          onPointerDown={(event) => beginDrag(event, box, "move")}
-        />
         <strong className="box-name">{box.name}</strong>
         {box.role.type !== "content" && (
           <button
             className="system-box-action"
-            aria-label={box.name}
+            aria-label={label}
             aria-pressed={systemBoxSelected(box)}
-            onClick={() => activateSystemBox(box)}
+            data-language-key={box.labelKey ?? undefined}
+            onClick={() => {
+              if (suppressSystemClickRef.current) return;
+              activateSystemBox(box);
+            }}
           >
-            <span aria-hidden="true">{systemBoxSelected(box) ? "●" : "○"}</span>
+            <span className="system-box-state" aria-hidden="true">{systemBoxSelected(box) ? "●" : "○"}</span>
+            <span className="system-box-label">{label}</span>
           </button>
         )}
         <div
@@ -530,6 +562,11 @@ export function App() {
                     <button role="menuitem" onClick={() => setContext({ ...context, mode: "rename" })}>
                       {t("action.renameBox")}
                     </button>
+                    {contextBox.labelKey && (
+                      <button role="menuitem" onClick={() => setContext({ ...context, mode: "label" })}>
+                        {t("action.editBoxLabel")}
+                      </button>
+                    )}
                     {surface === "main" ? (
                       <button
                         role="menuitem"
@@ -579,6 +616,23 @@ export function App() {
                   autoFocus
                   value={context.draftName}
                   onChange={(event) => setContext({ ...context, draftName: event.target.value })}
+                />
+                <div className="context-actions">
+                  <button type="submit">{t("action.save")}</button>
+                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                </div>
+              </form>
+            )}
+
+            {context.mode === "label" && contextBox?.labelKey && (
+              <form onSubmit={editBoxLabel}>
+                <label htmlFor="box-label">{t("box.label.edit")}</label>
+                <textarea
+                  id="box-label"
+                  autoFocus
+                  rows={3}
+                  value={context.draftLabel}
+                  onChange={(event) => setContext({ ...context, draftLabel: event.target.value })}
                 />
                 <div className="context-actions">
                   <button type="submit">{t("action.save")}</button>
@@ -673,4 +727,15 @@ function pointIsInside(element: HTMLElement, clientX: number, clientY: number) {
 function descendantIds(workspace: WorkspaceState, boxId: string): string[] {
   const direct = Object.values(workspace.boxes).filter((box) => box.parentId === boxId);
   return direct.flatMap((box) => [box.id, ...descendantIds(workspace, box.id)]);
+}
+
+function localizedBoxLabel(workspace: WorkspaceState, box: BoxNode) {
+  return box.labelKey ? workspace.localeMessages[box.labelKey] ?? "" : "";
+}
+
+function sameRect(left: GridRect, right: GridRect) {
+  return left.column === right.column
+    && left.row === right.row
+    && left.width === right.width
+    && left.height === right.height;
 }

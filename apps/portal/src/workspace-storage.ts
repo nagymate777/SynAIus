@@ -1,18 +1,22 @@
 import {
   migrateWorkspaceV1,
   migrateWorkspaceV2,
+  migrateWorkspaceV3,
   type BoxNode,
   type DeviceKind,
   type DeviceNames,
   type LegacyBoxNodeV1,
   type LegacyBoxNodeV2,
+  type LegacyBoxNodeV3,
   type LegacyWorkspaceStateV1,
   type LegacyWorkspaceStateV2,
+  type LegacyWorkspaceStateV3,
   type WorkspaceState,
   type WorkspaceView,
 } from "@synaius/domain";
 
-export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v3";
+export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v4";
+const V3_WORKSPACE_STORAGE_KEY = "synaius.workspace.v3";
 const V2_WORKSPACE_STORAGE_KEY = "synaius.workspace.v2";
 const V1_WORKSPACE_STORAGE_KEY = "synaius.workspace.v1";
 const DEVICE_KINDS: DeviceKind[] = ["desktop", "tablet", "mobile"];
@@ -25,6 +29,9 @@ export function loadWorkspace(
   try {
     const current: unknown = parseStoredValue(WORKSPACE_STORAGE_KEY);
     if (isWorkspaceState(current)) return current;
+
+    const versionThree: unknown = parseStoredValue(V3_WORKSPACE_STORAGE_KEY);
+    if (isLegacyWorkspaceStateV3(versionThree)) return migrateWorkspaceV3(versionThree);
 
     const versionTwo: unknown = parseStoredValue(V2_WORKSPACE_STORAGE_KEY);
     if (isLegacyWorkspaceStateV2(versionTwo)) return migrateWorkspaceV2(versionTwo, activeLayout);
@@ -47,15 +54,32 @@ export function saveWorkspace(workspace: WorkspaceState) {
 }
 
 export function isWorkspaceState(value: unknown): value is WorkspaceState {
-  if (!isWorkspaceBase(value) || value.schemaVersion !== 3 || !isDeviceKind(value.activeLayout)) return false;
+  if (!isWorkspaceBase(value) || value.schemaVersion !== 4 || !isDeviceKind(value.activeLayout)) return false;
   if (!DEVICE_KINDS.every((device) => typeof value.deviceDefaults[device] === "string"
       && Object.prototype.hasOwnProperty.call(value.views, value.deviceDefaults[device] as string))) return false;
   if (!isRecord(value.preferences)
     || typeof value.preferences.handlesVisible !== "boolean"
     || typeof value.preferences.namesVisible !== "boolean") return false;
+  const localeMessages = value.localeMessages;
+  if (!isStringRecord(localeMessages)) return false;
 
   const boxes = Object.values(value.boxes);
   if (!boxes.every(isBoxNode)) return false;
+  return boxes.every((box) => referencesAreValid(value, box)
+    && (box.role.type === "content"
+      ? box.labelKey === null
+      : typeof box.labelKey === "string" && typeof localeMessages[box.labelKey] === "string"));
+}
+
+export function isLegacyWorkspaceStateV3(value: unknown): value is LegacyWorkspaceStateV3 {
+  if (!isWorkspaceBase(value) || value.schemaVersion !== 3 || !isDeviceKind(value.activeLayout)) return false;
+  if (!DEVICE_KINDS.every((device) => typeof value.deviceDefaults[device] === "string"
+    && Object.prototype.hasOwnProperty.call(value.views, value.deviceDefaults[device] as string))) return false;
+  if (!isRecord(value.preferences)
+    || typeof value.preferences.handlesVisible !== "boolean"
+    || typeof value.preferences.namesVisible !== "boolean") return false;
+  const boxes = Object.values(value.boxes);
+  if (!boxes.every(isLegacyBoxNodeV3)) return false;
   return boxes.every((box) => referencesAreValid(value, box));
 }
 
@@ -101,7 +125,7 @@ function isWorkspaceBase(value: unknown): value is Record<string, unknown> & {
 
 function referencesAreValid(
   workspace: { views: Record<string, WorkspaceView>; boxes: Record<string, unknown> },
-  box: BoxNode | LegacyBoxNodeV2,
+  box: BoxNode | LegacyBoxNodeV2 | LegacyBoxNodeV3,
 ) {
   if (box.viewId !== null && !Object.prototype.hasOwnProperty.call(workspace.views, box.viewId)) return false;
   if (box.parentId !== null && !Object.prototype.hasOwnProperty.call(workspace.boxes, box.parentId)) return false;
@@ -120,7 +144,16 @@ function isBoxNode(value: unknown): value is BoxNode {
   return isBoxNodeBase(value)
     && (value.viewId === null || typeof value.viewId === "string")
     && isBoxRole(value.role)
+    && (value.labelKey === null || typeof value.labelKey === "string")
     && isLayoutRects(value.layoutRects);
+}
+
+function isLegacyBoxNodeV3(value: unknown): value is LegacyBoxNodeV3 {
+  return isBoxNodeBase(value)
+    && (value.viewId === null || typeof value.viewId === "string")
+    && isBoxRole(value.role)
+    && isLayoutRects(value.layoutRects)
+    && !("labelKey" in value);
 }
 
 function isLegacyBoxNodeV2(value: unknown): value is LegacyBoxNodeV2 {
@@ -128,7 +161,8 @@ function isLegacyBoxNodeV2(value: unknown): value is LegacyBoxNodeV2 {
     && (value.viewId === null || typeof value.viewId === "string")
     && isBoxRole(value.role)
     && isGridRect(value.rect)
-    && !("layoutRects" in value);
+    && !("layoutRects" in value)
+    && !("labelKey" in value);
 }
 
 function isLegacyBoxNodeV1(value: unknown): value is LegacyBoxNodeV1 {
@@ -136,10 +170,11 @@ function isLegacyBoxNodeV1(value: unknown): value is LegacyBoxNodeV1 {
     && typeof value.viewId === "string"
     && isGridRect(value.rect)
     && !("role" in value)
-    && !("layoutRects" in value);
+    && !("layoutRects" in value)
+    && !("labelKey" in value);
 }
 
-function isBoxNodeBase(value: unknown): value is Record<string, unknown> & Omit<BoxNode, "viewId" | "role" | "layoutRects"> {
+function isBoxNodeBase(value: unknown): value is Record<string, unknown> & Omit<BoxNode, "viewId" | "role" | "layoutRects" | "labelKey"> {
   return isRecord(value)
     && typeof value.id === "string"
     && (value.parentId === null || typeof value.parentId === "string")
@@ -192,4 +227,8 @@ function isBoxStyle(value: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
 }

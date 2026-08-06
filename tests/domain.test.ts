@@ -24,12 +24,13 @@ describe("workspace command core", () => {
   it("creates protected global view and device control boxes on the dense grid", () => {
     const state = initial();
     const systemBoxes = Object.values(state.boxes).filter((box) => box.role.type !== "content");
-    expect(state.schemaVersion).toBe(3);
+    expect(state.schemaVersion).toBe(4);
     expect(state.activeLayout).toBe("desktop");
     expect(state.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(state.views.main.grid.columns).toBe(24);
     expect(systemBoxes).toHaveLength(4);
     expect(systemBoxes.every((box) => box.viewId === null)).toBe(true);
+    expect(systemBoxes.every((box) => box.labelKey && state.localeMessages[box.labelKey] === box.name)).toBe(true);
     expect(() => apply(state, {
       type: "box.delete",
       payload: { boxId: systemBoxes[0].id },
@@ -139,6 +140,23 @@ describe("workspace command core", () => {
     state = apply(state, { type: "box.rename", payload: { boxId: viewBox!.id, name: "Kezdőlap" } });
     expect(state.views.main.name).toBe("Kezdőlap");
     expect(state.boxes[viewBox!.id].name).toBe("Kezdőlap");
+  });
+
+  it("stores editable system-box text under a stable localization key", () => {
+    let state = initial();
+    const deviceBox = Object.values(state.boxes).find((box) => box.role.type === "device" && box.role.device === "mobile");
+    expect(deviceBox?.labelKey).toBeDefined();
+    const originalName = deviceBox!.name;
+    state = apply(state, {
+      type: "localization.message.set",
+      payload: { key: deviceBox!.labelKey!, value: "Telefonos elrendezés" },
+    });
+    expect(state.localeMessages[deviceBox!.labelKey!]).toBe("Telefonos elrendezés");
+    expect(state.boxes[deviceBox!.id].name).toBe(originalName);
+    expect(() => apply(state, {
+      type: "localization.message.set",
+      payload: { key: "workspace.box.missing.label", value: "Ismeretlen" },
+    })).toThrowError(new DomainError("localization.key.notFound"));
   });
 
   it("deletes only leaf boxes so a subtree cannot disappear implicitly", () => {

@@ -29,6 +29,7 @@ export interface BoxNode {
   viewId: string | null;
   parentId: string | null;
   name: string;
+  labelKey: string | null;
   layoutRects: Record<DeviceKind, GridRect>;
   childGrid: GridDefinition;
   style: BoxStyle;
@@ -48,7 +49,7 @@ export interface WorkspacePreferences {
 }
 
 export interface WorkspaceState {
-  schemaVersion: 3;
+  schemaVersion: 4;
   id: string;
   revision: number;
   activeViewId: string;
@@ -57,28 +58,36 @@ export interface WorkspaceState {
   views: Record<string, WorkspaceView>;
   boxes: Record<string, BoxNode>;
   preferences: WorkspacePreferences;
+  localeMessages: Record<string, string>;
   globalStyle: BoxStyle;
 }
 
-export interface LegacyBoxNodeV1 extends Omit<BoxNode, "role" | "viewId" | "layoutRects"> {
+export interface LegacyBoxNodeV1 extends Omit<BoxNode, "role" | "viewId" | "layoutRects" | "labelKey"> {
   viewId: string;
   rect: GridRect;
 }
 
-export interface LegacyWorkspaceStateV1 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "preferences" | "activeLayout" | "deviceDefaults"> {
+export interface LegacyWorkspaceStateV1 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "preferences" | "activeLayout" | "deviceDefaults" | "localeMessages"> {
   schemaVersion: 1;
   deviceDefaults: Partial<Record<DeviceKind, string>>;
   boxes: Record<string, LegacyBoxNodeV1>;
 }
 
-export interface LegacyBoxNodeV2 extends Omit<BoxNode, "layoutRects"> {
+export interface LegacyBoxNodeV2 extends Omit<BoxNode, "layoutRects" | "labelKey"> {
   rect: GridRect;
 }
 
-export interface LegacyWorkspaceStateV2 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "activeLayout" | "deviceDefaults"> {
+export interface LegacyWorkspaceStateV2 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "activeLayout" | "deviceDefaults" | "localeMessages"> {
   schemaVersion: 2;
   deviceDefaults: Partial<Record<DeviceKind, string>>;
   boxes: Record<string, LegacyBoxNodeV2>;
+}
+
+export type LegacyBoxNodeV3 = Omit<BoxNode, "labelKey">;
+
+export interface LegacyWorkspaceStateV3 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "localeMessages"> {
+  schemaVersion: 3;
+  boxes: Record<string, LegacyBoxNodeV3>;
 }
 
 interface CommandEnvelope<TType extends string, TPayload> {
@@ -96,6 +105,7 @@ export type WorkspaceCommand =
   | CommandEnvelope<"grid.visibility.set", { viewId: string; visible: boolean }>
   | CommandEnvelope<"workspace.handles.set", { visible: boolean }>
   | CommandEnvelope<"workspace.names.set", { visible: boolean }>
+  | CommandEnvelope<"localization.message.set", { key: string; value: string }>
   | CommandEnvelope<"box.create", { boxId: string; viewId: string; parentId: string | null; name: string; rect: GridRect }>
   | CommandEnvelope<"box.rename", { boxId: string; name: string }>
   | CommandEnvelope<"box.move", { boxId: string; layout: DeviceKind; column: number; row: number }>
@@ -142,6 +152,7 @@ export function createWorkspace(input: {
     mobile: "device.mobile",
   };
   const boxes: Record<string, BoxNode> = {};
+  const localeMessages: Record<string, string> = {};
   const viewBox = createSystemBox({
     id: systemViewBoxId(initialViewId),
     name: initialViewName,
@@ -149,6 +160,7 @@ export function createWorkspace(input: {
     rect: viewControlRect(0),
   });
   boxes[viewBox.id] = viewBox;
+  localeMessages[requiredLabelKey(viewBox)] = initialViewName;
   for (const [index, device] of (["desktop", "tablet", "mobile"] as const).entries()) {
     const box = createSystemBox({
       id: systemDeviceBoxId(device),
@@ -157,9 +169,10 @@ export function createWorkspace(input: {
       rect: { column: 6 + index * 6, row: 0, width: 6, height: 2 },
     });
     boxes[box.id] = box;
+    localeMessages[requiredLabelKey(box)] = normalizedName(deviceNames[device]);
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: workspaceId,
     revision: 0,
     activeViewId: initialViewId,
@@ -174,6 +187,7 @@ export function createWorkspace(input: {
     },
     boxes,
     preferences: { handlesVisible: true, namesVisible: true },
+    localeMessages,
     globalStyle: { declarations: {}, scopedCss: "" },
   };
 }
@@ -189,6 +203,7 @@ export function migrateWorkspaceV1(
       return [box.id, {
         ...rest,
         viewId: box.viewId,
+        labelKey: null,
         layoutRects: layoutRectsFrom(scaleRect(rect)),
         childGrid: { ...box.childGrid, columns: 24 },
         role: { type: "content" } as const,
@@ -218,8 +233,10 @@ export function migrateWorkspaceV1(
     });
   });
 
+  const localeMessages = localeMessagesFromBoxes(boxes);
+
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -228,26 +245,55 @@ export function migrateWorkspaceV1(
     views,
     boxes,
     preferences: { handlesVisible: true, namesVisible: true },
+    localeMessages,
     globalStyle: structuredClone(current.globalStyle),
   };
 }
 
 export function migrateWorkspaceV2(current: LegacyWorkspaceStateV2, activeLayout: DeviceKind = "desktop"): WorkspaceState {
+  const boxes: Record<string, BoxNode> = Object.fromEntries(
+    Object.values(current.boxes).map((box) => {
+      const { rect, ...rest } = structuredClone(box);
+      return [box.id, {
+        ...rest,
+        labelKey: box.role.type === "content" ? null : systemBoxLabelKey(box.id),
+        layoutRects: layoutRectsFrom(rect),
+      }];
+    }),
+  );
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
     activeLayout,
     deviceDefaults: deviceDefaultsWithFallback(current.deviceDefaults, current.activeViewId),
     views: structuredClone(current.views),
-    boxes: Object.fromEntries(
-      Object.values(current.boxes).map((box) => {
-        const { rect, ...rest } = structuredClone(box);
-        return [box.id, { ...rest, layoutRects: layoutRectsFrom(rect) }];
-      }),
-    ),
+    boxes,
     preferences: structuredClone(current.preferences),
+    localeMessages: localeMessagesFromBoxes(boxes),
+    globalStyle: structuredClone(current.globalStyle),
+  };
+}
+
+export function migrateWorkspaceV3(current: LegacyWorkspaceStateV3): WorkspaceState {
+  const boxes: Record<string, BoxNode> = Object.fromEntries(
+    Object.values(current.boxes).map((box) => [box.id, {
+      ...structuredClone(box),
+      labelKey: box.role.type === "content" ? null : systemBoxLabelKey(box.id),
+    }]),
+  );
+  return {
+    schemaVersion: 4,
+    id: current.id,
+    revision: current.revision,
+    activeViewId: current.activeViewId,
+    activeLayout: current.activeLayout,
+    deviceDefaults: structuredClone(current.deviceDefaults),
+    views: structuredClone(current.views),
+    boxes,
+    preferences: structuredClone(current.preferences),
+    localeMessages: localeMessagesFromBoxes(boxes),
     globalStyle: structuredClone(current.globalStyle),
   };
 }
@@ -272,12 +318,14 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         name,
         grid: { columns: 24, visible: false },
       };
-      state.boxes[boxId] = createSystemBox({
+      const box = createSystemBox({
         id: boxId,
         name,
         role: { type: "view", viewId: command.payload.viewId },
         rect: viewControlRect(viewIndex),
       });
+      state.boxes[boxId] = box;
+      state.localeMessages[requiredLabelKey(box)] = name;
       break;
     }
     case "view.activate": {
@@ -306,6 +354,14 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       state.preferences.namesVisible = command.payload.visible;
       break;
     }
+    case "localization.message.set": {
+      const key = requiredId(command.payload.key);
+      if (!Object.prototype.hasOwnProperty.call(state.localeMessages, key)) {
+        throw new DomainError("localization.key.notFound");
+      }
+      state.localeMessages[key] = normalizedName(command.payload.value);
+      break;
+    }
     case "box.create": {
       requiredId(command.payload.boxId);
       if (state.boxes[command.payload.boxId]) throw new DomainError("box.id.duplicate");
@@ -319,6 +375,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         viewId: view.id,
         parentId: parent?.id ?? null,
         name: normalizedName(command.payload.name),
+        labelKey: null,
         layoutRects: layoutRectsFrom(command.payload.rect),
         childGrid: { columns: 24, visible: false },
         style: { declarations: {}, scopedCss: "" },
@@ -423,12 +480,30 @@ function createSystemBox(input: { id: string; name: string; role: Exclude<BoxRol
     viewId: null,
     parentId: null,
     name: input.name,
+    labelKey: systemBoxLabelKey(input.id),
     layoutRects: layoutRectsFrom(input.rect),
     childGrid: { columns: 24, visible: false },
     style: { declarations: {}, scopedCss: "" },
     role: input.role,
     archived: false,
   };
+}
+
+function systemBoxLabelKey(boxId: string) {
+  return `workspace.box.${boxId}.label`;
+}
+
+function requiredLabelKey(box: BoxNode) {
+  if (!box.labelKey) throw new DomainError("localization.key.missing");
+  return box.labelKey;
+}
+
+function localeMessagesFromBoxes(boxes: Record<string, BoxNode>) {
+  return Object.fromEntries(
+    Object.values(boxes)
+      .filter((box): box is BoxNode & { labelKey: string } => box.labelKey !== null)
+      .map((box) => [box.labelKey, box.name]),
+  );
 }
 
 function layoutRectsFrom(rect: GridRect): Record<DeviceKind, GridRect> {

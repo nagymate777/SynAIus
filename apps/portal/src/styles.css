@@ -112,6 +112,16 @@ button:disabled {
   box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.45);
 }
 
+.portal-shell[data-handles-visible="true"] .canvas-box {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.portal-shell[data-handles-visible="true"] .canvas-box[data-dragging="true"] {
+  cursor: grabbing;
+}
+
 .box-name {
   position: absolute;
   z-index: 4;
@@ -149,14 +159,34 @@ button:disabled {
   z-index: 2;
   inset: 0;
   display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  padding: 0.35rem 0.5rem;
+  padding: 0.55rem 1.3rem;
   border: 0;
   border-radius: inherit;
   background: transparent;
   color: #8ef0df;
+}
+
+.portal-shell[data-handles-visible="true"] .system-box-action {
+  cursor: grab;
+}
+
+.system-box-label {
+  overflow: hidden;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: center;
+  white-space: pre-wrap;
+  pointer-events: none;
+}
+
+.system-box-state {
+  position: absolute;
+  right: 0.45rem;
+  bottom: 0.3rem;
+  pointer-events: none;
 }
 
 .system-box-action:hover,
@@ -186,14 +216,6 @@ button:disabled {
 .handle-start {
   left: -0.25rem;
   top: -0.25rem;
-}
-
-.handle-move {
-  left: 50%;
-  top: -0.25rem;
-  width: 2.2rem;
-  border-radius: 1rem;
-  transform: translateX(-50%);
 }
 
 .handle-end {
@@ -253,13 +275,15 @@ button:disabled {
   gap: 0.5rem;
 }
 
-.context-menu input {
+.context-menu input,
+.context-menu textarea {
   width: 100%;
   border: 1px solid #3a485b;
   border-radius: 0.5rem;
   background: #080d14;
   color: inherit;
   padding: 0.6rem;
+  resize: vertical;
 }
 
 .context-menu p {

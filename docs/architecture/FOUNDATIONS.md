@@ -10,3 +10,4 @@
 8. A client can attach by thread ID regardless of which SynAIus surface created the thread.
 9. Public source must never contain credentials, personal information or machine-local runtime state.
 10. Views own box identity and content; device layouts own per-device geometry, while default-view selection remains a separate concern.
+11. Runtime-editable localized content uses stable language keys in the workspace catalog so it participates in the same translation workflow as static interface text.
