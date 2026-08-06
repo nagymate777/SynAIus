@@ -88,4 +88,17 @@ describe("workspace command core", () => {
     state = apply(state, { type: "view.setDeviceDefault", payload: { device: "mobile", viewId: "mobile" } });
     expect(state.deviceDefaults.mobile).toBe("mobile");
   });
+
+  it("deletes only leaf boxes so a subtree cannot disappear implicitly", () => {
+    let state = withTwoBoxes();
+    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", rect: { column: 0, row: 0, width: 3, height: 3 } } });
+    expect(() => apply(state, {
+      type: "box.delete",
+      payload: { boxId: "parent" },
+    })).toThrowError(new DomainError("box.delete.hasChildren"));
+
+    state = apply(state, { type: "box.delete", payload: { boxId: "child" } });
+    expect(state.boxes.child).toBeUndefined();
+    expect(state.boxes.parent).toBeDefined();
+  });
 });

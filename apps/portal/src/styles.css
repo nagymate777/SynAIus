@@ -31,6 +31,17 @@ button[aria-current="page"] {
   background: #17312f;
 }
 
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid #8ef0df;
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .portal-shell {
   min-height: 100vh;
   padding: clamp(0.8rem, 2vw, 1.5rem);
@@ -73,6 +84,14 @@ h1 {
   gap: 0.5rem;
 }
 
+.workspace-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1rem;
+}
+
 .canvas {
   --cell-size: clamp(24px, 4vw, 56px);
   display: grid;
@@ -80,11 +99,11 @@ h1 {
   grid-auto-rows: var(--cell-size);
   position: relative;
   min-height: calc(100vh - 13rem);
-  margin-top: 1rem;
   overflow: auto;
   border: 1px solid #283242;
   border-radius: 1rem;
   background-color: #0c1119;
+  isolation: isolate;
 }
 
 .canvas[data-grid-visible="true"] {
@@ -99,18 +118,40 @@ h1 {
   min-width: 0;
   min-height: 0;
   margin: 0.25rem;
-  padding: 1.5rem 0.8rem 0.8rem;
+  padding: 1.35rem 0.7rem 0.7rem;
   border: 1px solid #62d5c4;
   border-radius: 0.8rem;
   background: rgb(21 33 45 / 0.94);
   box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.24);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.canvas-box[data-dragging="true"] {
+  z-index: 20;
+  border-color: #f0c86a;
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.45);
+}
+
+.box-name {
+  position: relative;
+  z-index: 1;
+  display: block;
+  overflow: hidden;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .box-children {
+  --child-cell-size: 1.5rem;
+  position: absolute;
+  inset: 2.5rem 0.35rem 0.35rem;
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: 1.5rem;
-  min-height: 100%;
+  grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
+  grid-auto-rows: var(--child-cell-size);
+  align-content: start;
+  min-height: var(--child-cell-size);
 }
 
 .handle {
@@ -123,6 +164,8 @@ h1 {
   border: 1px solid #06100e;
   border-radius: 50%;
   background: #62d5c4;
+  touch-action: none;
+  user-select: none;
 }
 
 .handle-start {
@@ -150,6 +193,123 @@ h1 {
   color: #8c9aab;
 }
 
+.archive-panel {
+  position: sticky;
+  top: 1rem;
+  min-height: 10rem;
+  padding: 1rem;
+  border: 1px solid #283242;
+  border-radius: 1rem;
+  background: #0c1119;
+}
+
+.archive-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.archive-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.archive-heading span,
+.archive-panel p {
+  color: #8c9aab;
+  font-size: 0.8rem;
+}
+
+.archive-panel ul {
+  display: grid;
+  gap: 0.6rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.archive-panel li {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.7rem;
+  border: 1px solid #283242;
+  border-radius: 0.7rem;
+  background: #101722;
+}
+
+.archive-panel li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-panel li button {
+  padding: 0.45rem 0.6rem;
+  font-size: 0.76rem;
+}
+
+.context-backdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  gap: 0.35rem;
+  width: 15rem;
+  padding: 0.5rem;
+  border: 1px solid #3a485b;
+  border-radius: 0.8rem;
+  background: #111925;
+  box-shadow: 0 1.2rem 3rem rgb(0 0 0 / 0.5);
+}
+
+.context-menu > button,
+.context-menu form > button {
+  width: 100%;
+  text-align: left;
+}
+
+.context-menu form,
+.context-menu form label {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.context-menu input {
+  width: 100%;
+  border: 1px solid #3a485b;
+  border-radius: 0.55rem;
+  background: #080d14;
+  color: inherit;
+  padding: 0.65rem;
+}
+
+.context-menu p {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.context-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+}
+
+.context-actions button {
+  flex: 1;
+}
+
+.context-menu .danger {
+  border-color: #b34b55;
+  background: #421b22;
+}
+
 @media (max-width: 640px) {
   .topbar {
     align-items: flex-start;
@@ -165,5 +325,16 @@ h1 {
 
   .canvas {
     min-height: calc(100vh - 17rem);
+  }
+}
+
+@media (max-width: 900px) {
+  .workspace-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .archive-panel {
+    position: static;
+    min-height: auto;
   }
 }

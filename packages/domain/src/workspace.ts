@@ -64,6 +64,7 @@ export type WorkspaceCommand =
   | CommandEnvelope<"box.nest", { boxId: string; parentId: string | null; rect: GridRect }>
   | CommandEnvelope<"box.archive", { boxId: string }>
   | CommandEnvelope<"box.restore", { boxId: string; parentId: string | null; rect: GridRect }>
+  | CommandEnvelope<"box.delete", { boxId: string }>
   | CommandEnvelope<"box.style.patch", { boxId: string; declarations?: Record<string, string | null>; scopedCss?: string }>;
 
 export type CommandPayload<T extends WorkspaceCommand["type"]> = Extract<WorkspaceCommand, { type: T }>["payload"];
@@ -205,6 +206,14 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       box.parentId = parent?.id ?? null;
       box.rect = { ...command.payload.rect };
       box.archived = false;
+      break;
+    }
+    case "box.delete": {
+      const box = requireBox(state, command.payload.boxId);
+      if (Object.values(state.boxes).some((candidate) => candidate.parentId === box.id)) {
+        throw new DomainError("box.delete.hasChildren");
+      }
+      delete state.boxes[box.id];
       break;
     }
     case "box.style.patch": {
