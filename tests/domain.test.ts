@@ -24,7 +24,9 @@ describe("workspace command core", () => {
   it("creates protected global view and device control boxes on the dense grid", () => {
     const state = initial();
     const systemBoxes = Object.values(state.boxes).filter((box) => box.role.type !== "content");
-    expect(state.schemaVersion).toBe(2);
+    expect(state.schemaVersion).toBe(3);
+    expect(state.activeLayout).toBe("desktop");
+    expect(state.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(state.views.main.grid.columns).toBe(24);
     expect(systemBoxes).toHaveLength(4);
     expect(systemBoxes.every((box) => box.viewId === null)).toBe(true);
@@ -70,18 +72,18 @@ describe("workspace command core", () => {
 
   it("nests boxes without changing child coordinates when the parent later moves", () => {
     let state = withTwoBoxes();
-    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", rect: { column: 2, row: 1, width: 4, height: 3 } } });
-    state = apply(state, { type: "box.move", payload: { boxId: "parent", column: 3, row: 4 } });
+    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", layout: "desktop", rect: { column: 2, row: 1, width: 4, height: 3 } } });
+    state = apply(state, { type: "box.move", payload: { boxId: "parent", layout: "desktop", column: 3, row: 4 } });
     expect(state.boxes.child.parentId).toBe("parent");
-    expect(state.boxes.child.rect).toEqual({ column: 2, row: 1, width: 4, height: 3 });
+    expect(state.boxes.child.layoutRects.desktop).toEqual({ column: 2, row: 1, width: 4, height: 3 });
   });
 
   it("prevents parent cycles", () => {
     let state = withTwoBoxes();
-    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", rect: { column: 0, row: 0, width: 3, height: 3 } } });
+    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", layout: "desktop", rect: { column: 0, row: 0, width: 3, height: 3 } } });
     expect(() => apply(state, {
       type: "box.nest",
-      payload: { boxId: "parent", parentId: "child", rect: { column: 0, row: 0, width: 3, height: 3 } },
+      payload: { boxId: "parent", parentId: "child", layout: "desktop", rect: { column: 0, row: 0, width: 3, height: 3 } },
     })).toThrowError(new DomainError("box.parent.cycle"));
   });
 
@@ -90,19 +92,19 @@ describe("workspace command core", () => {
     state = apply(state, { type: "box.style.patch", payload: { boxId: "child", declarations: { color: "#fff" } } });
     state = apply(state, { type: "box.archive", payload: { boxId: "child" } });
     expect(state.boxes.child.archived).toBe(true);
-    state = apply(state, { type: "box.restore", payload: { boxId: "child", parentId: null, rect: { column: 6, row: 0, width: 3, height: 3 } } });
+    state = apply(state, { type: "box.restore", payload: { boxId: "child", parentId: null, layout: "desktop", rect: { column: 6, row: 0, width: 3, height: 3 } } });
     expect(state.boxes.child.archived).toBe(false);
     expect(state.boxes.child.style.declarations.color).toBe("#fff");
   });
 
   it("moves an entire nested subtree between the main and background surfaces", () => {
     let state = withTwoBoxes();
-    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", rect: { column: 2, row: 1, width: 4, height: 3 } } });
+    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", layout: "desktop", rect: { column: 2, row: 1, width: 4, height: 3 } } });
     state = apply(state, { type: "box.archive", payload: { boxId: "parent" } });
     expect(state.boxes.parent.archived).toBe(true);
     expect(state.boxes.child.archived).toBe(true);
-    state = apply(state, { type: "box.move", payload: { boxId: "parent", column: 4, row: 5 } });
-    state = apply(state, { type: "box.restore", payload: { boxId: "parent", parentId: null, rect: state.boxes.parent.rect } });
+    state = apply(state, { type: "box.move", payload: { boxId: "parent", layout: "desktop", column: 4, row: 5 } });
+    state = apply(state, { type: "box.restore", payload: { boxId: "parent", parentId: null, layout: "desktop", rect: state.boxes.parent.layoutRects.desktop } });
     expect(state.boxes.parent.archived).toBe(false);
     expect(state.boxes.child.archived).toBe(false);
   });
@@ -112,6 +114,15 @@ describe("workspace command core", () => {
     state = apply(state, { type: "view.create", payload: { viewId: "mobile", name: "Mobil" } });
     state = apply(state, { type: "view.setDeviceDefault", payload: { device: "mobile", viewId: "mobile" } });
     expect(state.deviceDefaults.mobile).toBe("mobile");
+  });
+
+  it("keeps independent geometry for each device layout", () => {
+    let state = withTwoBoxes();
+    state = apply(state, { type: "box.move", payload: { boxId: "parent", layout: "mobile", column: 12, row: 8 } });
+    state = apply(state, { type: "layout.activate", payload: { device: "mobile" } });
+    expect(state.activeLayout).toBe("mobile");
+    expect(state.boxes.parent.layoutRects.mobile).toEqual({ column: 12, row: 8, width: 6, height: 6 });
+    expect(state.boxes.parent.layoutRects.desktop).toEqual({ column: 0, row: 0, width: 6, height: 6 });
   });
 
   it("stores handle and box-name visibility through commands", () => {
@@ -132,7 +143,7 @@ describe("workspace command core", () => {
 
   it("deletes only leaf boxes so a subtree cannot disappear implicitly", () => {
     let state = withTwoBoxes();
-    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", rect: { column: 0, row: 0, width: 3, height: 3 } } });
+    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", layout: "desktop", rect: { column: 0, row: 0, width: 3, height: 3 } } });
     expect(() => apply(state, {
       type: "box.delete",
       payload: { boxId: "parent" },

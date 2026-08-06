@@ -247,14 +247,15 @@ export function App() {
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     const parent = box.parentId ? workspace.boxes[box.parentId] : null;
+    const rect = box.layoutRects[workspace.activeLayout];
     const nextDrag: DragState = {
       boxId: box.id,
       mode,
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startRect: box.rect,
-      previewRect: box.rect,
+      startRect: rect,
+      previewRect: rect,
       metrics: readGridMetrics(grid, parent?.childGrid.columns ?? activeView.grid.columns),
     };
     dragRef.current = nextDrag;
@@ -291,8 +292,10 @@ export function App() {
     const currentWorkspace = workspaceRef.current;
     const box = currentWorkspace.boxes[current.boxId];
     if (!box) return;
+    const layout = currentWorkspace.activeLayout;
+    const boxRect = box.layoutRects[layout];
     if (current.mode !== "move") {
-      send("box.resize", { boxId: box.id, rect: current.previewRect });
+      send("box.resize", { boxId: box.id, layout, rect: current.previewRect });
       return;
     }
 
@@ -305,10 +308,11 @@ export function App() {
         send("box.nest", {
           boxId: box.id,
           parentId: targetParentId,
+          layout,
           rect: rectAtPoint(
             gridPointFromClient(metrics, clientX, clientY),
-            box.rect.width,
-            box.rect.height,
+            boxRect.width,
+            boxRect.height,
             targetParent.childGrid.columns,
           ),
         });
@@ -322,10 +326,11 @@ export function App() {
       send("box.nest", {
         boxId: box.id,
         parentId: null,
+        layout,
         rect: rectAtPoint(
           gridPointFromClient(metrics, clientX, clientY),
-          box.rect.width,
-          box.rect.height,
+          boxRect.width,
+          boxRect.height,
           currentView.grid.columns,
         ),
       });
@@ -334,6 +339,7 @@ export function App() {
 
     send("box.move", {
       boxId: box.id,
+      layout,
       column: current.previewRect.column,
       row: current.previewRect.row,
     });
@@ -361,20 +367,18 @@ export function App() {
 
   function activateSystemBox(box: BoxNode) {
     if (box.role.type === "view") send("view.activate", { viewId: box.role.viewId });
-    if (box.role.type === "device") {
-      send("view.setDeviceDefault", { device: box.role.device, viewId: activeView.id });
-    }
+    if (box.role.type === "device") send("layout.activate", { device: box.role.device });
   }
 
   function systemBoxSelected(box: BoxNode) {
     if (box.role.type === "view") return box.role.viewId === activeView.id;
-    if (box.role.type === "device") return workspace.deviceDefaults[box.role.device] === activeView.id;
+    if (box.role.type === "device") return workspace.activeLayout === box.role.device;
     return false;
   }
 
   function renderBox(box: BoxNode) {
     const children = surfaceBoxes.filter((candidate) => candidate.parentId === box.id);
-    const renderedRect = drag?.boxId === box.id ? drag.previewRect : box.rect;
+    const renderedRect = drag?.boxId === box.id ? drag.previewRect : box.layoutRects[workspace.activeLayout];
     return (
       <article
         className="canvas-box"
@@ -432,6 +436,7 @@ export function App() {
       data-handles-visible={workspace.preferences.handlesVisible}
       data-names-visible={workspace.preferences.namesVisible}
       data-surface={surface}
+      data-layout={workspace.activeLayout}
     >
       <section
         className="canvas"
@@ -506,6 +511,22 @@ export function App() {
 
                 {contextBox && (
                   <>
+                    {contextBox.role.type === "view" && (
+                      <button
+                        role="menuitem"
+                        aria-pressed={workspace.deviceDefaults[workspace.activeLayout] === contextBox.role.viewId}
+                        onClick={() => {
+                          if (contextBox.role.type !== "view") return;
+                          send("view.setDeviceDefault", {
+                            device: workspace.activeLayout,
+                            viewId: contextBox.role.viewId,
+                          });
+                          setContext(null);
+                        }}
+                      >
+                        {t("action.setDefaultView", { layout: deviceNames[workspace.activeLayout] })}
+                      </button>
+                    )}
                     <button role="menuitem" onClick={() => setContext({ ...context, mode: "rename" })}>
                       {t("action.renameBox")}
                     </button>
@@ -523,7 +544,12 @@ export function App() {
                       <button
                         role="menuitem"
                         onClick={() => {
-                          send("box.restore", { boxId: contextBox.id, parentId: null, rect: contextBox.rect });
+                          send("box.restore", {
+                            boxId: contextBox.id,
+                            parentId: null,
+                            layout: workspace.activeLayout,
+                            rect: contextBox.layoutRects[workspace.activeLayout],
+                          });
                           setContext(null);
                         }}
                       >
@@ -586,14 +612,24 @@ export function App() {
 }
 
 function createInitialWorkspace() {
+  const detectedLayout = deviceKindForWidth(window.innerWidth);
   const fallback = createWorkspace({
     workspaceId: "workspace-main",
     initialViewId: "view-main",
     initialViewName: t("view.defaultName"),
     deviceNames,
+    initialLayout: detectedLayout,
   });
-  const workspace = loadWorkspace(fallback, deviceNames);
-  const defaultViewId = workspace.deviceDefaults[deviceKindForWidth(window.innerWidth)];
+  let workspace = loadWorkspace(fallback, deviceNames, detectedLayout);
+  if (workspace.activeLayout !== detectedLayout) {
+    workspace = applyWorkspaceCommand(workspace, {
+      id: crypto.randomUUID(),
+      expectedRevision: workspace.revision,
+      type: "layout.activate",
+      payload: { device: detectedLayout },
+    }).state;
+  }
+  const defaultViewId = workspace.deviceDefaults[detectedLayout];
   if (!defaultViewId || !workspace.views[defaultViewId] || defaultViewId === workspace.activeViewId) return workspace;
   return applyWorkspaceCommand(workspace, {
     id: crypto.randomUUID(),

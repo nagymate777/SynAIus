@@ -29,7 +29,7 @@ export interface BoxNode {
   viewId: string | null;
   parentId: string | null;
   name: string;
-  rect: GridRect;
+  layoutRects: Record<DeviceKind, GridRect>;
   childGrid: GridDefinition;
   style: BoxStyle;
   role: BoxRole;
@@ -48,24 +48,37 @@ export interface WorkspacePreferences {
 }
 
 export interface WorkspaceState {
-  schemaVersion: 2;
+  schemaVersion: 3;
   id: string;
   revision: number;
   activeViewId: string;
-  deviceDefaults: Partial<Record<DeviceKind, string>>;
+  activeLayout: DeviceKind;
+  deviceDefaults: Record<DeviceKind, string>;
   views: Record<string, WorkspaceView>;
   boxes: Record<string, BoxNode>;
   preferences: WorkspacePreferences;
   globalStyle: BoxStyle;
 }
 
-export interface LegacyBoxNodeV1 extends Omit<BoxNode, "role" | "viewId"> {
+export interface LegacyBoxNodeV1 extends Omit<BoxNode, "role" | "viewId" | "layoutRects"> {
   viewId: string;
+  rect: GridRect;
 }
 
-export interface LegacyWorkspaceStateV1 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "preferences"> {
+export interface LegacyWorkspaceStateV1 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "preferences" | "activeLayout" | "deviceDefaults"> {
   schemaVersion: 1;
+  deviceDefaults: Partial<Record<DeviceKind, string>>;
   boxes: Record<string, LegacyBoxNodeV1>;
+}
+
+export interface LegacyBoxNodeV2 extends Omit<BoxNode, "layoutRects"> {
+  rect: GridRect;
+}
+
+export interface LegacyWorkspaceStateV2 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "activeLayout" | "deviceDefaults"> {
+  schemaVersion: 2;
+  deviceDefaults: Partial<Record<DeviceKind, string>>;
+  boxes: Record<string, LegacyBoxNodeV2>;
 }
 
 interface CommandEnvelope<TType extends string, TPayload> {
@@ -79,16 +92,17 @@ export type WorkspaceCommand =
   | CommandEnvelope<"view.create", { viewId: string; name: string }>
   | CommandEnvelope<"view.activate", { viewId: string }>
   | CommandEnvelope<"view.setDeviceDefault", { device: DeviceKind; viewId: string }>
+  | CommandEnvelope<"layout.activate", { device: DeviceKind }>
   | CommandEnvelope<"grid.visibility.set", { viewId: string; visible: boolean }>
   | CommandEnvelope<"workspace.handles.set", { visible: boolean }>
   | CommandEnvelope<"workspace.names.set", { visible: boolean }>
   | CommandEnvelope<"box.create", { boxId: string; viewId: string; parentId: string | null; name: string; rect: GridRect }>
   | CommandEnvelope<"box.rename", { boxId: string; name: string }>
-  | CommandEnvelope<"box.move", { boxId: string; column: number; row: number }>
-  | CommandEnvelope<"box.resize", { boxId: string; rect: GridRect }>
-  | CommandEnvelope<"box.nest", { boxId: string; parentId: string | null; rect: GridRect }>
+  | CommandEnvelope<"box.move", { boxId: string; layout: DeviceKind; column: number; row: number }>
+  | CommandEnvelope<"box.resize", { boxId: string; layout: DeviceKind; rect: GridRect }>
+  | CommandEnvelope<"box.nest", { boxId: string; parentId: string | null; layout: DeviceKind; rect: GridRect }>
   | CommandEnvelope<"box.archive", { boxId: string }>
-  | CommandEnvelope<"box.restore", { boxId: string; parentId: string | null; rect: GridRect }>
+  | CommandEnvelope<"box.restore", { boxId: string; parentId: string | null; layout: DeviceKind; rect: GridRect }>
   | CommandEnvelope<"box.delete", { boxId: string }>
   | CommandEnvelope<"box.style.patch", { boxId: string; declarations?: Record<string, string | null>; scopedCss?: string }>;
 
@@ -117,6 +131,7 @@ export function createWorkspace(input: {
   initialViewId: string;
   initialViewName: string;
   deviceNames?: DeviceNames;
+  initialLayout?: DeviceKind;
 }): WorkspaceState {
   const workspaceId = requiredId(input.workspaceId);
   const initialViewId = requiredId(input.initialViewId);
@@ -144,11 +159,12 @@ export function createWorkspace(input: {
     boxes[box.id] = box;
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: workspaceId,
     revision: 0,
     activeViewId: initialViewId,
-    deviceDefaults: { desktop: initialViewId },
+    activeLayout: input.initialLayout ?? "desktop",
+    deviceDefaults: { desktop: initialViewId, tablet: initialViewId, mobile: initialViewId },
     views: {
       [initialViewId]: {
         id: initialViewId,
@@ -162,15 +178,22 @@ export function createWorkspace(input: {
   };
 }
 
-export function migrateWorkspaceV1(current: LegacyWorkspaceStateV1, deviceNames: DeviceNames): WorkspaceState {
+export function migrateWorkspaceV1(
+  current: LegacyWorkspaceStateV1,
+  deviceNames: DeviceNames,
+  activeLayout: DeviceKind = "desktop",
+): WorkspaceState {
   const boxes: Record<string, BoxNode> = Object.fromEntries(
-    Object.values(current.boxes).map((box) => [box.id, {
-      ...structuredClone(box),
-      viewId: box.viewId,
-      rect: scaleRect(box.rect),
-      childGrid: { ...box.childGrid, columns: 24 },
-      role: { type: "content" } as const,
-    }]),
+    Object.values(current.boxes).map((box) => {
+      const { rect, ...rest } = structuredClone(box);
+      return [box.id, {
+        ...rest,
+        viewId: box.viewId,
+        layoutRects: layoutRectsFrom(scaleRect(rect)),
+        childGrid: { ...box.childGrid, columns: 24 },
+        role: { type: "content" } as const,
+      }];
+    }),
   );
   const views = Object.fromEntries(
     Object.values(current.views).map((view) => [view.id, {
@@ -196,14 +219,35 @@ export function migrateWorkspaceV1(current: LegacyWorkspaceStateV1, deviceNames:
   });
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
-    deviceDefaults: structuredClone(current.deviceDefaults),
+    activeLayout,
+    deviceDefaults: deviceDefaultsWithFallback(current.deviceDefaults, current.activeViewId),
     views,
     boxes,
     preferences: { handlesVisible: true, namesVisible: true },
+    globalStyle: structuredClone(current.globalStyle),
+  };
+}
+
+export function migrateWorkspaceV2(current: LegacyWorkspaceStateV2, activeLayout: DeviceKind = "desktop"): WorkspaceState {
+  return {
+    schemaVersion: 3,
+    id: current.id,
+    revision: current.revision,
+    activeViewId: current.activeViewId,
+    activeLayout,
+    deviceDefaults: deviceDefaultsWithFallback(current.deviceDefaults, current.activeViewId),
+    views: structuredClone(current.views),
+    boxes: Object.fromEntries(
+      Object.values(current.boxes).map((box) => {
+        const { rect, ...rest } = structuredClone(box);
+        return [box.id, { ...rest, layoutRects: layoutRectsFrom(rect) }];
+      }),
+    ),
+    preferences: structuredClone(current.preferences),
     globalStyle: structuredClone(current.globalStyle),
   };
 }
@@ -246,6 +290,10 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       state.deviceDefaults[command.payload.device] = command.payload.viewId;
       break;
     }
+    case "layout.activate": {
+      state.activeLayout = command.payload.device;
+      break;
+    }
     case "grid.visibility.set": {
       requireView(state, command.payload.viewId).grid.visible = command.payload.visible;
       break;
@@ -271,7 +319,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         viewId: view.id,
         parentId: parent?.id ?? null,
         name: normalizedName(command.payload.name),
-        rect: { ...command.payload.rect },
+        layoutRects: layoutRectsFrom(command.payload.rect),
         childGrid: { columns: 24, visible: false },
         style: { declarations: {}, scopedCss: "" },
         role: { type: "content" },
@@ -292,15 +340,15 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
     case "box.move": {
       const box = requireBox(state, command.payload.boxId);
       const columns = parentColumns(state, box);
-      const rect = { ...box.rect, column: command.payload.column, row: command.payload.row };
+      const rect = { ...box.layoutRects[command.payload.layout], column: command.payload.column, row: command.payload.row };
       assertRect(rect, columns);
-      box.rect = rect;
+      box.layoutRects[command.payload.layout] = rect;
       break;
     }
     case "box.resize": {
       const box = requireBox(state, command.payload.boxId);
       assertRect(command.payload.rect, parentColumns(state, box));
-      box.rect = { ...command.payload.rect };
+      box.layoutRects[command.payload.layout] = { ...command.payload.rect };
       break;
     }
     case "box.nest": {
@@ -311,7 +359,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       const columns = parent?.childGrid.columns ?? rootColumns(state, box);
       assertRect(command.payload.rect, columns);
       box.parentId = parent?.id ?? null;
-      box.rect = { ...command.payload.rect };
+      box.layoutRects[command.payload.layout] = { ...command.payload.rect };
       break;
     }
     case "box.archive": {
@@ -327,7 +375,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       if (parent && (parent.id === box.id || isDescendant(state, parent.id, box.id))) throw new DomainError("box.parent.cycle");
       assertRect(command.payload.rect, parent?.childGrid.columns ?? rootColumns(state, box));
       box.parentId = parent?.id ?? null;
-      box.rect = { ...command.payload.rect };
+      box.layoutRects[command.payload.layout] = { ...command.payload.rect };
       setArchivedForSubtree(state, box.id, false);
       break;
     }
@@ -375,11 +423,30 @@ function createSystemBox(input: { id: string; name: string; role: Exclude<BoxRol
     viewId: null,
     parentId: null,
     name: input.name,
-    rect: input.rect,
+    layoutRects: layoutRectsFrom(input.rect),
     childGrid: { columns: 24, visible: false },
     style: { declarations: {}, scopedCss: "" },
     role: input.role,
     archived: false,
+  };
+}
+
+function layoutRectsFrom(rect: GridRect): Record<DeviceKind, GridRect> {
+  return {
+    desktop: { ...rect },
+    tablet: { ...rect },
+    mobile: { ...rect },
+  };
+}
+
+function deviceDefaultsWithFallback(
+  defaults: Partial<Record<DeviceKind, string>>,
+  fallbackViewId: string,
+): Record<DeviceKind, string> {
+  return {
+    desktop: defaults.desktop ?? fallbackViewId,
+    tablet: defaults.tablet ?? fallbackViewId,
+    mobile: defaults.mobile ?? fallbackViewId,
   };
 }
 

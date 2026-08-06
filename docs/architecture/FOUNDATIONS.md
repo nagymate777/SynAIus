@@ -9,3 +9,4 @@
 7. Thread streaming is cursor-based and durable. Raw app-server events are stored before derived events are broadcast.
 8. A client can attach by thread ID regardless of which SynAIus surface created the thread.
 9. Public source must never contain credentials, personal information or machine-local runtime state.
+10. Views own box identity and content; device layouts own per-device geometry, while default-view selection remains a separate concern.

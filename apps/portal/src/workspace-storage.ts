@@ -1,24 +1,36 @@
 import {
   migrateWorkspaceV1,
+  migrateWorkspaceV2,
   type BoxNode,
   type DeviceKind,
   type DeviceNames,
   type LegacyBoxNodeV1,
+  type LegacyBoxNodeV2,
   type LegacyWorkspaceStateV1,
+  type LegacyWorkspaceStateV2,
   type WorkspaceState,
   type WorkspaceView,
 } from "@synaius/domain";
 
-export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v2";
-const LEGACY_WORKSPACE_STORAGE_KEY = "synaius.workspace.v1";
+export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v3";
+const V2_WORKSPACE_STORAGE_KEY = "synaius.workspace.v2";
+const V1_WORKSPACE_STORAGE_KEY = "synaius.workspace.v1";
+const DEVICE_KINDS: DeviceKind[] = ["desktop", "tablet", "mobile"];
 
-export function loadWorkspace(fallback: WorkspaceState, deviceNames: DeviceNames): WorkspaceState {
+export function loadWorkspace(
+  fallback: WorkspaceState,
+  deviceNames: DeviceNames,
+  activeLayout: DeviceKind,
+): WorkspaceState {
   try {
     const current: unknown = parseStoredValue(WORKSPACE_STORAGE_KEY);
     if (isWorkspaceState(current)) return current;
 
-    const legacy: unknown = parseStoredValue(LEGACY_WORKSPACE_STORAGE_KEY);
-    if (isLegacyWorkspaceState(legacy)) return migrateWorkspaceV1(legacy, deviceNames);
+    const versionTwo: unknown = parseStoredValue(V2_WORKSPACE_STORAGE_KEY);
+    if (isLegacyWorkspaceStateV2(versionTwo)) return migrateWorkspaceV2(versionTwo, activeLayout);
+
+    const versionOne: unknown = parseStoredValue(V1_WORKSPACE_STORAGE_KEY);
+    if (isLegacyWorkspaceState(versionOne)) return migrateWorkspaceV1(versionOne, deviceNames, activeLayout);
   } catch {
     return fallback;
   }
@@ -35,24 +47,31 @@ export function saveWorkspace(workspace: WorkspaceState) {
 }
 
 export function isWorkspaceState(value: unknown): value is WorkspaceState {
-  if (!isWorkspaceBase(value) || value.schemaVersion !== 2) return false;
+  if (!isWorkspaceBase(value) || value.schemaVersion !== 3 || !isDeviceKind(value.activeLayout)) return false;
+  if (!DEVICE_KINDS.every((device) => typeof value.deviceDefaults[device] === "string"
+      && Object.prototype.hasOwnProperty.call(value.views, value.deviceDefaults[device] as string))) return false;
   if (!isRecord(value.preferences)
     || typeof value.preferences.handlesVisible !== "boolean"
     || typeof value.preferences.namesVisible !== "boolean") return false;
 
   const boxes = Object.values(value.boxes);
   if (!boxes.every(isBoxNode)) return false;
-  return boxes.every((box) => {
-    if (box.viewId !== null && !Object.prototype.hasOwnProperty.call(value.views, box.viewId)) return false;
-    if (box.parentId !== null && !Object.prototype.hasOwnProperty.call(value.boxes, box.parentId)) return false;
-    if (box.role.type === "view" && !Object.prototype.hasOwnProperty.call(value.views, box.role.viewId)) return false;
-    return true;
-  });
+  return boxes.every((box) => referencesAreValid(value, box));
+}
+
+export function isLegacyWorkspaceStateV2(value: unknown): value is LegacyWorkspaceStateV2 {
+  if (!isWorkspaceBase(value) || value.schemaVersion !== 2) return false;
+  if (!isRecord(value.preferences)
+    || typeof value.preferences.handlesVisible !== "boolean"
+    || typeof value.preferences.namesVisible !== "boolean") return false;
+  const boxes = Object.values(value.boxes);
+  if (!boxes.every(isLegacyBoxNodeV2)) return false;
+  return boxes.every((box) => referencesAreValid(value, box));
 }
 
 export function isLegacyWorkspaceState(value: unknown): value is LegacyWorkspaceStateV1 {
   if (!isWorkspaceBase(value) || value.schemaVersion !== 1) return false;
-  return Object.values(value.boxes).every(isLegacyBoxNode);
+  return Object.values(value.boxes).every(isLegacyBoxNodeV1);
 }
 
 function parseStoredValue(key: string): unknown {
@@ -74,7 +93,20 @@ function isWorkspaceBase(value: unknown): value is Record<string, unknown> & {
   if (typeof value.activeViewId !== "string" || !isRecord(value.views) || !isRecord(value.boxes)) return false;
   if (!isRecord(value.deviceDefaults) || !isBoxStyle(value.globalStyle)) return false;
   if (!Object.values(value.views).every(isWorkspaceView)) return false;
+  if (!Object.entries(value.deviceDefaults).every(([device, viewId]) => isDeviceKind(device)
+    && typeof viewId === "string"
+    && Object.prototype.hasOwnProperty.call(value.views, viewId))) return false;
   return Object.prototype.hasOwnProperty.call(value.views, value.activeViewId);
+}
+
+function referencesAreValid(
+  workspace: { views: Record<string, WorkspaceView>; boxes: Record<string, unknown> },
+  box: BoxNode | LegacyBoxNodeV2,
+) {
+  if (box.viewId !== null && !Object.prototype.hasOwnProperty.call(workspace.views, box.viewId)) return false;
+  if (box.parentId !== null && !Object.prototype.hasOwnProperty.call(workspace.boxes, box.parentId)) return false;
+  if (box.role.type === "view" && !Object.prototype.hasOwnProperty.call(workspace.views, box.role.viewId)) return false;
+  return true;
 }
 
 function isWorkspaceView(value: unknown): value is WorkspaceView {
@@ -87,19 +119,31 @@ function isWorkspaceView(value: unknown): value is WorkspaceView {
 function isBoxNode(value: unknown): value is BoxNode {
   return isBoxNodeBase(value)
     && (value.viewId === null || typeof value.viewId === "string")
-    && isBoxRole(value.role);
+    && isBoxRole(value.role)
+    && isLayoutRects(value.layoutRects);
 }
 
-function isLegacyBoxNode(value: unknown): value is LegacyBoxNodeV1 {
-  return isBoxNodeBase(value) && typeof value.viewId === "string" && !("role" in value);
+function isLegacyBoxNodeV2(value: unknown): value is LegacyBoxNodeV2 {
+  return isBoxNodeBase(value)
+    && (value.viewId === null || typeof value.viewId === "string")
+    && isBoxRole(value.role)
+    && isGridRect(value.rect)
+    && !("layoutRects" in value);
 }
 
-function isBoxNodeBase(value: unknown): value is Record<string, unknown> & Omit<BoxNode, "viewId" | "role"> {
+function isLegacyBoxNodeV1(value: unknown): value is LegacyBoxNodeV1 {
+  return isBoxNodeBase(value)
+    && typeof value.viewId === "string"
+    && isGridRect(value.rect)
+    && !("role" in value)
+    && !("layoutRects" in value);
+}
+
+function isBoxNodeBase(value: unknown): value is Record<string, unknown> & Omit<BoxNode, "viewId" | "role" | "layoutRects"> {
   return isRecord(value)
     && typeof value.id === "string"
     && (value.parentId === null || typeof value.parentId === "string")
     && typeof value.name === "string"
-    && isGridRect(value.rect)
     && isGridDefinition(value.childGrid)
     && isBoxStyle(value.style)
     && typeof value.archived === "boolean";
@@ -109,7 +153,15 @@ function isBoxRole(value: unknown): value is BoxNode["role"] {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "content") return true;
   if (value.type === "view") return typeof value.viewId === "string";
-  return value.type === "device" && ["desktop", "tablet", "mobile"].includes(String(value.device));
+  return value.type === "device" && isDeviceKind(value.device);
+}
+
+function isLayoutRects(value: unknown): value is BoxNode["layoutRects"] {
+  return isRecord(value) && DEVICE_KINDS.every((device) => isGridRect(value[device]));
+}
+
+function isDeviceKind(value: unknown): value is DeviceKind {
+  return value === "desktop" || value === "tablet" || value === "mobile";
 }
 
 function isGridDefinition(value: unknown) {

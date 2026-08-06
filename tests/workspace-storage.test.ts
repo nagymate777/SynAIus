@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createWorkspace, migrateWorkspaceV1, type LegacyWorkspaceStateV1 } from "@synaius/domain";
-import { isLegacyWorkspaceState, isWorkspaceState } from "../apps/portal/src/workspace-storage";
+import {
+  createWorkspace,
+  migrateWorkspaceV1,
+  migrateWorkspaceV2,
+  type LegacyWorkspaceStateV1,
+  type LegacyWorkspaceStateV2,
+} from "@synaius/domain";
+import { isLegacyWorkspaceState, isLegacyWorkspaceStateV2, isWorkspaceState } from "../apps/portal/src/workspace-storage";
 
 describe("workspace storage validation", () => {
   it("accepts the current schema and rejects broken references", () => {
@@ -33,8 +39,45 @@ describe("workspace storage validation", () => {
     };
     expect(isLegacyWorkspaceState(legacy)).toBe(true);
     const migrated = migrateWorkspaceV1(legacy, { desktop: "Asztali gép", tablet: "Táblagép", mobile: "Mobiltelefon" });
-    expect(migrated.boxes.content.rect).toEqual({ column: 4, row: 2, width: 6, height: 4 });
+    expect(migrated.boxes.content.layoutRects.desktop).toEqual({ column: 4, row: 2, width: 6, height: 4 });
+    expect(migrated.boxes.content.layoutRects.mobile).toEqual({ column: 4, row: 2, width: 6, height: 4 });
     expect(migrated.boxes.content.role).toEqual({ type: "content" });
     expect(Object.values(migrated.boxes).filter((box) => box.role.type !== "content")).toHaveLength(4);
+  });
+
+  it("migrates version two geometry into every device layout", () => {
+    const previous: LegacyWorkspaceStateV2 = {
+      schemaVersion: 2,
+      id: "workspace",
+      revision: 8,
+      activeViewId: "main",
+      deviceDefaults: { desktop: "main" },
+      views: { main: { id: "main", name: "Alapnézet", grid: { columns: 24, visible: false } } },
+      boxes: {
+        content: {
+          id: "content",
+          viewId: "main",
+          parentId: null,
+          name: "Tartalom",
+          rect: { column: 3, row: 4, width: 5, height: 6 },
+          childGrid: { columns: 24, visible: false },
+          style: { declarations: {}, scopedCss: "" },
+          role: { type: "content" },
+          archived: false,
+        },
+      },
+      preferences: { handlesVisible: true, namesVisible: true },
+      globalStyle: { declarations: {}, scopedCss: "" },
+    };
+    expect(isLegacyWorkspaceStateV2(previous)).toBe(true);
+    const migrated = migrateWorkspaceV2(previous, "tablet");
+    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.activeLayout).toBe("tablet");
+    expect(migrated.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
+    expect(migrated.boxes.content.layoutRects).toEqual({
+      desktop: previous.boxes.content.rect,
+      tablet: previous.boxes.content.rect,
+      mobile: previous.boxes.content.rect,
+    });
   });
 });

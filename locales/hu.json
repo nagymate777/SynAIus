@@ -12,6 +12,7 @@
   "action.renameBox": "Doboz átnevezése",
   "action.restoreBox": "Visszahelyezés",
   "action.save": "Mentés",
+  "action.setDefaultView": "Beállítás alapértelmezett nézetként ({layout})",
   "action.showGrid": "Segédrács megjelenítése",
   "action.showHandles": "Fogódzók megjelenítése",
   "action.showNames": "Doboznevek megjelenítése",
