@@ -44,6 +44,18 @@ export function loadWorkspace(
   return fallback;
 }
 
+export function upgradeWorkspaceState(
+  value: unknown,
+  deviceNames: DeviceNames,
+  activeLayout: DeviceKind,
+): WorkspaceState | null {
+  if (isWorkspaceState(value)) return value;
+  if (isLegacyWorkspaceStateV3(value)) return migrateWorkspaceV3(value);
+  if (isLegacyWorkspaceStateV2(value)) return migrateWorkspaceV2(value, activeLayout);
+  if (isLegacyWorkspaceState(value)) return migrateWorkspaceV1(value, deviceNames, activeLayout);
+  return null;
+}
+
 export function saveWorkspace(workspace: WorkspaceState) {
   try {
     localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));

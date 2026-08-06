@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  ChangeEvent,
   CSSProperties,
   FormEvent,
   MouseEvent as ReactMouseEvent,
@@ -31,6 +32,21 @@ import {
   type GridPoint,
 } from "./grid-interaction";
 import { loadWorkspace, saveWorkspace } from "./workspace-storage";
+import {
+  createWorkspaceSnapshot,
+  loadWorkspaceSnapshots,
+  parseWorkspaceExport,
+  saveWorkspaceSnapshots,
+  type WorkspaceSnapshot,
+} from "./workspace-snapshots";
+import {
+  commitEditorState,
+  createEditorState,
+  redoEditorState,
+  undoEditorState,
+  workspaceWithRevision,
+  type EditorState,
+} from "./editor-history";
 
 const t = createTranslator(hu);
 const deviceNames: DeviceNames = {
@@ -40,7 +56,7 @@ const deviceNames: DeviceNames = {
 };
 
 type DragMode = "move" | "resize-start" | "resize-end";
-type ContextMode = "actions" | "rename" | "label" | "delete";
+type ContextMode = "actions" | "rename" | "label" | "delete" | "copy-layout" | "snapshots" | "import";
 type Surface = "main" | "background";
 
 interface DragState {
@@ -62,13 +78,17 @@ interface ContextState {
   mode: ContextMode;
   draftName: string;
   draftLabel: string;
+  errorKey: string | null;
 }
 
 type GridStyle = CSSProperties & { "--grid-columns": number };
+type ContextMenuStyle = CSSProperties & { "--menu-top": string };
 
 export function App() {
-  const [workspace, setWorkspace] = useState(createInitialWorkspace);
+  const [editor, setEditor] = useState<EditorState>(() => createEditorState(createInitialWorkspace()));
+  const workspace = editor.workspace;
   const [surface, setSurface] = useState<Surface>("main");
+  const [snapshots, setSnapshots] = useState<WorkspaceSnapshot[]>(loadWorkspaceSnapshots);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [context, setContext] = useState<ContextState | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -82,6 +102,10 @@ export function App() {
   useEffect(() => {
     saveWorkspace(workspace);
   }, [workspace]);
+
+  useEffect(() => {
+    saveWorkspaceSnapshots(snapshots);
+  }, [snapshots]);
 
   useEffect(() => {
     function onPointerMove(event: PointerEvent) {
@@ -124,15 +148,94 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || isTextEditingTarget(event.target)) return;
+      const key = event.key.toLocaleLowerCase();
+      if (key === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undoWorkspace();
+      } else if (key === "y" || (key === "z" && event.shiftKey)) {
+        event.preventDefault();
+        redoWorkspace();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  function commitWorkspace(transform: (current: WorkspaceState) => WorkspaceState, recordHistory = true) {
+    setEditor((current) => commitEditorState(current, transform, recordHistory));
+  }
+
   function send<T extends WorkspaceCommand["type"]>(type: T, payload: CommandPayload<T>) {
-    setWorkspace((current) =>
+    commitWorkspace((current) =>
       applyWorkspaceCommand(current, {
         id: crypto.randomUUID(),
         expectedRevision: current.revision,
         type,
         payload,
       } as WorkspaceCommand).state,
-    );
+    commandRecordsHistory(type));
+  }
+
+  function undoWorkspace() {
+    setEditor(undoEditorState);
+    setContext(null);
+  }
+
+  function redoWorkspace() {
+    setEditor(redoEditorState);
+    setContext(null);
+  }
+
+  function copyLayout(target: DeviceKind) {
+    send("layout.copy", {
+      source: workspace.activeLayout,
+      target,
+      viewId: activeView.id,
+      boxId: contextBox?.id ?? null,
+    });
+    setContext(null);
+  }
+
+  function createSnapshot() {
+    const name = nextAvailableName("snapshot.generatedName", snapshots.map((snapshot) => snapshot.name));
+    setSnapshots((current) => [createWorkspaceSnapshot(workspace, name), ...current].slice(0, 30));
+    setContext(null);
+  }
+
+  function restoreSnapshot(snapshot: WorkspaceSnapshot) {
+    commitWorkspace((current) => workspaceWithRevision(snapshot.workspace, current.revision + 1));
+    setContext(null);
+  }
+
+  function deleteSnapshot(snapshotId: string) {
+    setSnapshots((current) => current.filter((snapshot) => snapshot.id !== snapshotId));
+  }
+
+  function exportWorkspace() {
+    const blob = new Blob([JSON.stringify(workspace, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = t("workspace.export.filename", { date: new Date().toISOString().slice(0, 10) });
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setContext(null);
+  }
+
+  async function importWorkspace(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const imported = parseWorkspaceExport(await file.text(), deviceNames, workspace.activeLayout);
+    if (!imported) {
+      setContext((current) => current ? { ...current, errorKey: "workspace.import.invalid" } : current);
+      event.target.value = "";
+      return;
+    }
+    commitWorkspace((current) => workspaceWithRevision(imported, current.revision + 1));
+    setContext(null);
   }
 
   const activeView = workspace.views[workspace.activeViewId];
@@ -153,7 +256,7 @@ export function App() {
     : false;
 
   function addView() {
-    setWorkspace((current) => {
+    commitWorkspace((current) => {
       const viewId = crypto.randomUUID();
       const name = nextAvailableName("view.generatedName", Object.values(current.views).map((view) => view.name));
       const created = applyWorkspaceCommand(current, {
@@ -173,7 +276,7 @@ export function App() {
   }
 
   function addBox(parentId: string | null = null, point?: GridPoint) {
-    setWorkspace((current) => {
+    commitWorkspace((current) => {
       const view = current.views[current.activeViewId];
       const parent = parentId ? current.boxes[parentId] : null;
       const columns = parent?.childGrid.columns ?? view.grid.columns;
@@ -210,6 +313,7 @@ export function App() {
       mode: "actions",
       draftName: "",
       draftLabel: "",
+      errorKey: null,
     });
   }
 
@@ -223,6 +327,7 @@ export function App() {
       mode: "actions",
       draftName: box.name,
       draftLabel: localizedBoxLabel(workspace, box),
+      errorKey: null,
     });
   }
 
@@ -488,13 +593,14 @@ export function App() {
           <div className="context-backdrop" aria-hidden="true" onPointerDown={() => setContext(null)} />
           <aside
             className="context-menu"
+            key={context.mode}
             role="menu"
-            style={{ left: context.x, top: context.y }}
+            style={{ left: context.x, top: context.y, "--menu-top": `${context.y}px` } as ContextMenuStyle}
             onPointerDown={(event) => event.stopPropagation()}
           >
             {context.mode === "actions" && (
               <>
-                {surface === "main" && (
+                {workspace.preferences.handlesVisible && surface === "main" && (
                   <button
                     role="menuitem"
                     onClick={() => addBox(
@@ -505,16 +611,29 @@ export function App() {
                     {t(contextBox?.role.type === "content" ? "context.addInside" : "action.addBox")}
                   </button>
                 )}
-                <button role="menuitem" onClick={addView}>{t("action.addView")}</button>
-                <button
-                  role="menuitem"
-                  onClick={() => {
-                    send("grid.visibility.set", { viewId: activeView.id, visible: !activeView.grid.visible });
-                    setContext(null);
-                  }}
-                >
-                  {t(activeView.grid.visible ? "action.hideGrid" : "action.showGrid")}
-                </button>
+                {workspace.preferences.handlesVisible && (
+                  <>
+                    <button role="menuitem" onClick={addView}>{t("action.addView")}</button>
+                    <button
+                      role="menuitem"
+                      onClick={() => {
+                        send("grid.visibility.set", { viewId: activeView.id, visible: !activeView.grid.visible });
+                        setContext(null);
+                      }}
+                    >
+                      {t(activeView.grid.visible ? "action.hideGrid" : "action.showGrid")}
+                    </button>
+                    <button role="menuitem" disabled={editor.undo.length === 0} onClick={undoWorkspace}>
+                      {t("action.undo")}
+                    </button>
+                    <button role="menuitem" disabled={editor.redo.length === 0} onClick={redoWorkspace}>
+                      {t("action.redo")}
+                    </button>
+                    <button role="menuitem" onClick={() => setContext({ ...context, mode: "copy-layout" })}>
+                      {t(contextBox ? "action.copyBoxLayout" : "action.copyViewLayout")}
+                    </button>
+                  </>
+                )}
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -522,7 +641,7 @@ export function App() {
                     setContext(null);
                   }}
                 >
-                  {t(workspace.preferences.handlesVisible ? "action.hideHandles" : "action.showHandles")}
+                  {t(workspace.preferences.handlesVisible ? "action.lockEditing" : "action.unlockEditing")}
                 </button>
                 <button
                   role="menuitem"
@@ -533,6 +652,16 @@ export function App() {
                 >
                   {t(workspace.preferences.namesVisible ? "action.hideNames" : "action.showNames")}
                 </button>
+                <button role="menuitem" onClick={createSnapshot}>{t("action.createSnapshot")}</button>
+                <button role="menuitem" onClick={() => setContext({ ...context, mode: "snapshots" })}>
+                  {t("action.manageSnapshots", { count: snapshots.length })}
+                </button>
+                <button role="menuitem" onClick={exportWorkspace}>{t("action.exportWorkspace")}</button>
+                {workspace.preferences.handlesVisible && (
+                  <button role="menuitem" onClick={() => setContext({ ...context, mode: "import", errorKey: null })}>
+                    {t("action.importWorkspace")}
+                  </button>
+                )}
                 <button
                   className="surface-menu-item"
                   role="menuitem"
@@ -541,7 +670,7 @@ export function App() {
                   {t(surface === "main" ? "action.openBackground" : "action.openMain")}
                 </button>
 
-                {contextBox && (
+                {workspace.preferences.handlesVisible && contextBox && (
                   <>
                     {contextBox.role.type === "view" && (
                       <button
@@ -641,6 +770,67 @@ export function App() {
               </form>
             )}
 
+            {context.mode === "copy-layout" && (
+              <div>
+                <p>{t(contextBox ? "layout.copyBoxPrompt" : "layout.copyViewPrompt", {
+                  layout: deviceNames[workspace.activeLayout],
+                })}</p>
+                <div className="context-stack">
+                  {(["desktop", "tablet", "mobile"] as const)
+                    .filter((device) => device !== workspace.activeLayout)
+                    .map((device) => (
+                      <button key={device} onClick={() => copyLayout(device)}>
+                        {t("layout.copyTo", { layout: deviceNames[device] })}
+                      </button>
+                    ))}
+                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                </div>
+              </div>
+            )}
+
+            {context.mode === "snapshots" && (
+              <div>
+                <p>{t("snapshot.title")}</p>
+                {snapshots.length === 0 ? (
+                  <p>{t("snapshot.empty")}</p>
+                ) : (
+                  <div className="snapshot-list">
+                    {snapshots.map((snapshot) => (
+                      <div className="snapshot-row" key={snapshot.id}>
+                        <button
+                          disabled={!workspace.preferences.handlesVisible}
+                          onClick={() => restoreSnapshot(snapshot)}
+                        >
+                          <span>{snapshot.name}</span>
+                          <small>{formatSnapshotDate(snapshot.createdAt)}</small>
+                        </button>
+                        <button className="danger" aria-label={t("snapshot.delete", { name: snapshot.name })} onClick={() => deleteSnapshot(snapshot.id)}>
+                          {t("action.deleteSnapshot")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.back")}</button>
+              </div>
+            )}
+
+            {context.mode === "import" && (
+              <div>
+                <label className="file-input-label">
+                  {t("workspace.import.label")}
+                  <input
+                    className="visually-hidden"
+                    type="file"
+                    accept="application/json,.json"
+                    onChange={importWorkspace}
+                  />
+                </label>
+                {context.errorKey && <p className="context-error">{t(context.errorKey)}</p>}
+                <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+              </div>
+            )}
+
             {context.mode === "delete" && contextBox && !isProtectedBox(contextBox) && (
               <div>
                 <p>{t("box.delete.confirm", { name: contextBox.name })}</p>
@@ -738,4 +928,26 @@ function sameRect(left: GridRect, right: GridRect) {
     && left.row === right.row
     && left.width === right.width
     && left.height === right.height;
+}
+
+function commandRecordsHistory(type: WorkspaceCommand["type"]) {
+  return !([
+    "view.activate",
+    "layout.activate",
+    "grid.visibility.set",
+    "workspace.handles.set",
+    "workspace.names.set",
+  ] as WorkspaceCommand["type"][]).includes(type);
+}
+
+function isTextEditingTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function formatSnapshotDate(value: string) {
+  return new Intl.DateTimeFormat("hu-HU", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(new Date(value));
 }

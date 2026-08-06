@@ -126,6 +126,23 @@ describe("workspace command core", () => {
     expect(state.boxes.parent.layoutRects.desktop).toEqual({ column: 0, row: 0, width: 6, height: 6 });
   });
 
+  it("copies one box or an entire view between device layouts", () => {
+    let state = withTwoBoxes();
+    state = apply(state, { type: "box.move", payload: { boxId: "parent", layout: "desktop", column: 8, row: 9 } });
+    state = apply(state, {
+      type: "layout.copy",
+      payload: { source: "desktop", target: "mobile", viewId: "main", boxId: "parent" },
+    });
+    expect(state.boxes.parent.layoutRects.mobile).toEqual(state.boxes.parent.layoutRects.desktop);
+    expect(state.boxes.child.layoutRects.mobile).toEqual({ column: 6, row: 0, width: 3, height: 3 });
+    state = apply(state, {
+      type: "layout.copy",
+      payload: { source: "desktop", target: "tablet", viewId: "main", boxId: null },
+    });
+    expect(state.boxes.parent.layoutRects.tablet).toEqual(state.boxes.parent.layoutRects.desktop);
+    expect(state.boxes.child.layoutRects.tablet).toEqual(state.boxes.child.layoutRects.desktop);
+  });
+
   it("stores handle and box-name visibility through commands", () => {
     let state = initial();
     state = apply(state, { type: "workspace.handles.set", payload: { visible: false } });

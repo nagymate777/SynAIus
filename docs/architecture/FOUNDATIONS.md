@@ -11,3 +11,6 @@
 9. Public source must never contain credentials, personal information or machine-local runtime state.
 10. Views own box identity and content; device layouts own per-device geometry, while default-view selection remains a separate concern.
 11. Runtime-editable localized content uses stable language keys in the workspace catalog so it participates in the same translation workflow as static interface text.
+12. Structural editing is explicitly lockable. A locked workspace remains navigable and exportable, but rejects layout and content mutations from the portal.
+13. Session undo/redo and named persistent snapshots are separate recovery layers. Snapshot and import payloads are schema-validated and migrated before activation.
+14. Device geometry can be copied through the versioned command core at box or whole-view scope; content identity remains shared.

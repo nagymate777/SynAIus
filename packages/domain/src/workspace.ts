@@ -102,6 +102,7 @@ export type WorkspaceCommand =
   | CommandEnvelope<"view.activate", { viewId: string }>
   | CommandEnvelope<"view.setDeviceDefault", { device: DeviceKind; viewId: string }>
   | CommandEnvelope<"layout.activate", { device: DeviceKind }>
+  | CommandEnvelope<"layout.copy", { source: DeviceKind; target: DeviceKind; viewId: string; boxId: string | null }>
   | CommandEnvelope<"grid.visibility.set", { viewId: string; visible: boolean }>
   | CommandEnvelope<"workspace.handles.set", { visible: boolean }>
   | CommandEnvelope<"workspace.names.set", { visible: boolean }>
@@ -340,6 +341,24 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
     }
     case "layout.activate": {
       state.activeLayout = command.payload.device;
+      break;
+    }
+    case "layout.copy": {
+      if (command.payload.source === command.payload.target) throw new DomainError("layout.copy.same");
+      requireView(state, command.payload.viewId);
+      if (command.payload.boxId) {
+        const box = requireBox(state, command.payload.boxId);
+        if (box.viewId !== null && box.viewId !== command.payload.viewId) {
+          throw new DomainError("layout.copy.viewMismatch");
+        }
+        box.layoutRects[command.payload.target] = { ...box.layoutRects[command.payload.source] };
+      } else {
+        Object.values(state.boxes)
+          .filter((box) => box.viewId === null || box.viewId === command.payload.viewId)
+          .forEach((box) => {
+            box.layoutRects[command.payload.target] = { ...box.layoutRects[command.payload.source] };
+          });
+      }
       break;
     }
     case "grid.visibility.set": {
