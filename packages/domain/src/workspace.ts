@@ -2,6 +2,11 @@ export type DeviceKind = "desktop" | "tablet" | "mobile";
 
 export type DeviceNames = Record<DeviceKind, string>;
 
+export interface CloneNameTemplates {
+  first: string;
+  numbered: string;
+}
+
 export interface GridRect {
   column: number;
   row: number;
@@ -34,7 +39,8 @@ export interface BoxNode {
   childGrid: GridDefinition;
   style: BoxStyle;
   role: BoxRole;
-  archived: boolean;
+  cloneSourceId: string | null;
+  cloneOrdinal: number | null;
 }
 
 export interface WorkspaceView {
@@ -49,7 +55,7 @@ export interface WorkspacePreferences {
 }
 
 export interface WorkspaceState {
-  schemaVersion: 4;
+  schemaVersion: 5;
   id: string;
   revision: number;
   activeViewId: string;
@@ -62,32 +68,75 @@ export interface WorkspaceState {
   globalStyle: BoxStyle;
 }
 
-export interface LegacyBoxNodeV1 extends Omit<BoxNode, "role" | "viewId" | "layoutRects" | "labelKey"> {
+interface LegacyBoxNodeBase {
+  id: string;
+  parentId: string | null;
+  name: string;
+  childGrid: GridDefinition;
+  style: BoxStyle;
+  archived: boolean;
+}
+
+export interface LegacyBoxNodeV1 extends LegacyBoxNodeBase {
   viewId: string;
   rect: GridRect;
 }
 
-export interface LegacyWorkspaceStateV1 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "preferences" | "activeLayout" | "deviceDefaults" | "localeMessages"> {
-  schemaVersion: 1;
+interface LegacyWorkspaceBase {
+  id: string;
+  revision: number;
+  activeViewId: string;
   deviceDefaults: Partial<Record<DeviceKind, string>>;
+  views: Record<string, WorkspaceView>;
+  globalStyle: BoxStyle;
+}
+
+export interface LegacyWorkspaceStateV1 extends LegacyWorkspaceBase {
+  schemaVersion: 1;
   boxes: Record<string, LegacyBoxNodeV1>;
 }
 
-export interface LegacyBoxNodeV2 extends Omit<BoxNode, "layoutRects" | "labelKey"> {
+export interface LegacyBoxNodeV2 extends LegacyBoxNodeBase {
+  viewId: string | null;
   rect: GridRect;
+  role: BoxRole;
 }
 
-export interface LegacyWorkspaceStateV2 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "activeLayout" | "deviceDefaults" | "localeMessages"> {
+export interface LegacyWorkspaceStateV2 extends LegacyWorkspaceBase {
   schemaVersion: 2;
-  deviceDefaults: Partial<Record<DeviceKind, string>>;
   boxes: Record<string, LegacyBoxNodeV2>;
+  preferences: WorkspacePreferences;
 }
 
-export type LegacyBoxNodeV3 = Omit<BoxNode, "labelKey">;
+export interface LegacyBoxNodeV3 extends LegacyBoxNodeBase {
+  viewId: string | null;
+  labelKey?: never;
+  layoutRects: Record<DeviceKind, GridRect>;
+  role: BoxRole;
+}
 
-export interface LegacyWorkspaceStateV3 extends Omit<WorkspaceState, "schemaVersion" | "boxes" | "localeMessages"> {
+export interface LegacyWorkspaceStateV3 extends LegacyWorkspaceBase {
   schemaVersion: 3;
+  activeLayout: DeviceKind;
+  deviceDefaults: Record<DeviceKind, string>;
   boxes: Record<string, LegacyBoxNodeV3>;
+  preferences: WorkspacePreferences;
+}
+
+export interface LegacyBoxNodeV4 extends LegacyBoxNodeBase {
+  viewId: string | null;
+  labelKey: string | null;
+  layoutRects: Record<DeviceKind, GridRect>;
+  role: BoxRole;
+}
+
+export interface LegacyWorkspaceStateV4 extends LegacyWorkspaceBase {
+  schemaVersion: 4;
+  activeLayout: DeviceKind;
+  deviceDefaults: Record<DeviceKind, string>;
+  boxes: Record<string, LegacyBoxNodeV4>;
+  preferences: WorkspacePreferences;
+  localeMessages: Record<string, string>;
 }
 
 interface CommandEnvelope<TType extends string, TPayload> {
@@ -112,8 +161,8 @@ export type WorkspaceCommand =
   | CommandEnvelope<"box.move", { boxId: string; layout: DeviceKind; column: number; row: number }>
   | CommandEnvelope<"box.resize", { boxId: string; layout: DeviceKind; rect: GridRect }>
   | CommandEnvelope<"box.nest", { boxId: string; parentId: string | null; layout: DeviceKind; rect: GridRect }>
-  | CommandEnvelope<"box.archive", { boxId: string }>
-  | CommandEnvelope<"box.restore", { boxId: string; parentId: string | null; layout: DeviceKind; rect: GridRect }>
+  | CommandEnvelope<"box.cutPaste", { boxId: string; targetViewId: string; layout: DeviceKind; rect: GridRect }>
+  | CommandEnvelope<"box.clonePaste", { sourceBoxId: string; targetViewId: string; layout: DeviceKind; rect: GridRect; idMap: Record<string, string> }>
   | CommandEnvelope<"box.delete", { boxId: string }>
   | CommandEnvelope<"box.style.patch", { boxId: string; declarations?: Record<string, string | null>; scopedCss?: string }>;
 
@@ -137,11 +186,19 @@ export class DomainError extends Error {
   }
 }
 
+const CLONE_NAME_KEY = "box.cloneName";
+const CLONE_NAME_NUMBERED_KEY = "box.cloneNameNumbered";
+const DEFAULT_CLONE_NAME_TEMPLATES: CloneNameTemplates = {
+  first: `${CLONE_NAME_KEY}:{name}`,
+  numbered: `${CLONE_NAME_NUMBERED_KEY}:{name}:{count}`,
+};
+
 export function createWorkspace(input: {
   workspaceId: string;
   initialViewId: string;
   initialViewName: string;
   deviceNames?: DeviceNames;
+  cloneNameTemplates?: CloneNameTemplates;
   initialLayout?: DeviceKind;
 }): WorkspaceState {
   const workspaceId = requiredId(input.workspaceId);
@@ -154,6 +211,7 @@ export function createWorkspace(input: {
   };
   const boxes: Record<string, BoxNode> = {};
   const localeMessages: Record<string, string> = {};
+  addCloneNameTemplates(localeMessages, input.cloneNameTemplates ?? DEFAULT_CLONE_NAME_TEMPLATES);
   const viewBox = createSystemBox({
     id: systemViewBoxId(initialViewId),
     name: initialViewName,
@@ -173,7 +231,7 @@ export function createWorkspace(input: {
     localeMessages[requiredLabelKey(box)] = normalizedName(deviceNames[device]);
   }
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     id: workspaceId,
     revision: 0,
     activeViewId: initialViewId,
@@ -197,10 +255,11 @@ export function migrateWorkspaceV1(
   current: LegacyWorkspaceStateV1,
   deviceNames: DeviceNames,
   activeLayout: DeviceKind = "desktop",
+  cloneNameTemplates: CloneNameTemplates = DEFAULT_CLONE_NAME_TEMPLATES,
 ): WorkspaceState {
   const boxes: Record<string, BoxNode> = Object.fromEntries(
     Object.values(current.boxes).map((box) => {
-      const { rect, ...rest } = structuredClone(box);
+      const { rect, archived: _archived, ...rest } = structuredClone(box);
       return [box.id, {
         ...rest,
         viewId: box.viewId,
@@ -208,6 +267,8 @@ export function migrateWorkspaceV1(
         layoutRects: layoutRectsFrom(scaleRect(rect)),
         childGrid: { ...box.childGrid, columns: 24 },
         role: { type: "content" } as const,
+        cloneSourceId: null,
+        cloneOrdinal: null,
       }];
     }),
   );
@@ -235,9 +296,10 @@ export function migrateWorkspaceV1(
   });
 
   const localeMessages = localeMessagesFromBoxes(boxes);
+  addCloneNameTemplates(localeMessages, cloneNameTemplates);
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -251,19 +313,27 @@ export function migrateWorkspaceV1(
   };
 }
 
-export function migrateWorkspaceV2(current: LegacyWorkspaceStateV2, activeLayout: DeviceKind = "desktop"): WorkspaceState {
+export function migrateWorkspaceV2(
+  current: LegacyWorkspaceStateV2,
+  activeLayout: DeviceKind = "desktop",
+  cloneNameTemplates: CloneNameTemplates = DEFAULT_CLONE_NAME_TEMPLATES,
+): WorkspaceState {
   const boxes: Record<string, BoxNode> = Object.fromEntries(
     Object.values(current.boxes).map((box) => {
-      const { rect, ...rest } = structuredClone(box);
+      const { rect, archived: _archived, ...rest } = structuredClone(box);
       return [box.id, {
         ...rest,
         labelKey: box.role.type === "content" ? null : systemBoxLabelKey(box.id),
         layoutRects: layoutRectsFrom(rect),
+        cloneSourceId: null,
+        cloneOrdinal: null,
       }];
     }),
   );
+  const localeMessages = localeMessagesFromBoxes(boxes);
+  addCloneNameTemplates(localeMessages, cloneNameTemplates);
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -272,20 +342,30 @@ export function migrateWorkspaceV2(current: LegacyWorkspaceStateV2, activeLayout
     views: structuredClone(current.views),
     boxes,
     preferences: structuredClone(current.preferences),
-    localeMessages: localeMessagesFromBoxes(boxes),
+    localeMessages,
     globalStyle: structuredClone(current.globalStyle),
   };
 }
 
-export function migrateWorkspaceV3(current: LegacyWorkspaceStateV3): WorkspaceState {
+export function migrateWorkspaceV3(
+  current: LegacyWorkspaceStateV3,
+  cloneNameTemplates: CloneNameTemplates = DEFAULT_CLONE_NAME_TEMPLATES,
+): WorkspaceState {
   const boxes: Record<string, BoxNode> = Object.fromEntries(
-    Object.values(current.boxes).map((box) => [box.id, {
-      ...structuredClone(box),
-      labelKey: box.role.type === "content" ? null : systemBoxLabelKey(box.id),
-    }]),
+    Object.values(current.boxes).map((box) => {
+      const { archived: _archived, ...rest } = structuredClone(box);
+      return [box.id, {
+        ...rest,
+        labelKey: box.role.type === "content" ? null : systemBoxLabelKey(box.id),
+        cloneSourceId: null,
+        cloneOrdinal: null,
+      }];
+    }),
   );
+  const localeMessages = localeMessagesFromBoxes(boxes);
+  addCloneNameTemplates(localeMessages, cloneNameTemplates);
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -294,7 +374,34 @@ export function migrateWorkspaceV3(current: LegacyWorkspaceStateV3): WorkspaceSt
     views: structuredClone(current.views),
     boxes,
     preferences: structuredClone(current.preferences),
-    localeMessages: localeMessagesFromBoxes(boxes),
+    localeMessages,
+    globalStyle: structuredClone(current.globalStyle),
+  };
+}
+
+export function migrateWorkspaceV4(
+  current: LegacyWorkspaceStateV4,
+  cloneNameTemplates: CloneNameTemplates = DEFAULT_CLONE_NAME_TEMPLATES,
+): WorkspaceState {
+  const boxes: Record<string, BoxNode> = Object.fromEntries(
+    Object.values(current.boxes).map((box) => {
+      const { archived: _archived, ...rest } = structuredClone(box);
+      return [box.id, { ...rest, cloneSourceId: null, cloneOrdinal: null }];
+    }),
+  );
+  const localeMessages = structuredClone(current.localeMessages);
+  addCloneNameTemplates(localeMessages, cloneNameTemplates);
+  return {
+    schemaVersion: 5,
+    id: current.id,
+    revision: current.revision,
+    activeViewId: current.activeViewId,
+    activeLayout: current.activeLayout,
+    deviceDefaults: structuredClone(current.deviceDefaults),
+    views: structuredClone(current.views),
+    boxes,
+    preferences: structuredClone(current.preferences),
+    localeMessages,
     globalStyle: structuredClone(current.globalStyle),
   };
 }
@@ -379,6 +486,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         throw new DomainError("localization.key.notFound");
       }
       state.localeMessages[key] = normalizedName(command.payload.value);
+      if (key === CLONE_NAME_KEY || key === CLONE_NAME_NUMBERED_KEY) recomputeCloneNames(state);
       break;
     }
     case "box.create": {
@@ -386,9 +494,9 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       if (state.boxes[command.payload.boxId]) throw new DomainError("box.id.duplicate");
       const view = requireView(state, command.payload.viewId);
       assertUniqueBoxName(state, command.payload.name);
-      const parent = command.payload.parentId ? requireSurfaceBox(state, command.payload.parentId, false) : null;
+      const parent = command.payload.parentId ? requireBox(state, command.payload.parentId) : null;
       if (parent && parent.viewId !== view.id) throw new DomainError("box.parent.viewMismatch");
-      assertRect(command.payload.rect, parent?.childGrid.columns ?? view.grid.columns);
+      assertRect(command.payload.rect, parent ? parent.childGrid.columns : null);
       state.boxes[command.payload.boxId] = {
         id: command.payload.boxId,
         viewId: view.id,
@@ -399,18 +507,22 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         childGrid: { columns: 24, visible: false },
         style: { declarations: {}, scopedCss: "" },
         role: { type: "content" },
-        archived: false,
+        cloneSourceId: null,
+        cloneOrdinal: null,
       };
       break;
     }
     case "box.rename": {
       const box = requireBox(state, command.payload.boxId);
-      assertUniqueBoxName(state, command.payload.name, box.id);
+      if (box.cloneSourceId) throw new DomainError("box.rename.clone");
+      const name = normalizedName(command.payload.name);
+      assertRenameWithClonesIsUnique(state, box, name);
       if (box.role.type === "view") {
-        assertUniqueViewName(state, command.payload.name, box.role.viewId);
-        requireView(state, box.role.viewId).name = normalizedName(command.payload.name);
+        assertUniqueViewName(state, name, box.role.viewId);
+        requireView(state, box.role.viewId).name = name;
       }
-      box.name = normalizedName(command.payload.name);
+      box.name = name;
+      renameLinkedClones(state, box.id, name);
       break;
     }
     case "box.move": {
@@ -429,7 +541,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
     }
     case "box.nest": {
       const box = requireBox(state, command.payload.boxId);
-      const parent = command.payload.parentId ? requireSurfaceBox(state, command.payload.parentId, box.archived) : null;
+      const parent = command.payload.parentId ? requireBox(state, command.payload.parentId) : null;
       if (parent && parent.viewId !== box.viewId) throw new DomainError("box.parent.viewMismatch");
       if (parent && (parent.id === box.id || isDescendant(state, parent.id, box.id))) throw new DomainError("box.parent.cycle");
       const columns = parent?.childGrid.columns ?? rootColumns(state, box);
@@ -438,21 +550,36 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       box.layoutRects[command.payload.layout] = { ...command.payload.rect };
       break;
     }
-    case "box.archive": {
-      const box = requireSurfaceBox(state, command.payload.boxId, false);
-      if (box.parentId && !requireBox(state, box.parentId).archived) box.parentId = null;
-      setArchivedForSubtree(state, box.id, true);
+    case "box.cutPaste": {
+      const box = requireContentBox(state, command.payload.boxId);
+      const targetView = requireView(state, command.payload.targetViewId);
+      assertRect(command.payload.rect, null);
+      box.parentId = null;
+      box.layoutRects[command.payload.layout] = { ...command.payload.rect };
+      setViewForSubtree(state, box.id, targetView.id);
       break;
     }
-    case "box.restore": {
-      const box = requireSurfaceBox(state, command.payload.boxId, true);
-      const parent = command.payload.parentId ? requireSurfaceBox(state, command.payload.parentId, false) : null;
-      if (parent && parent.viewId !== box.viewId) throw new DomainError("box.parent.viewMismatch");
-      if (parent && (parent.id === box.id || isDescendant(state, parent.id, box.id))) throw new DomainError("box.parent.cycle");
-      assertRect(command.payload.rect, parent?.childGrid.columns ?? rootColumns(state, box));
-      box.parentId = parent?.id ?? null;
-      box.layoutRects[command.payload.layout] = { ...command.payload.rect };
-      setArchivedForSubtree(state, box.id, false);
+    case "box.clonePaste": {
+      const source = requireContentBox(state, command.payload.sourceBoxId);
+      const targetView = requireView(state, command.payload.targetViewId);
+      const sourceIds = [source.id, ...descendantIds(state, source.id)];
+      assertCloneIdMap(state, sourceIds, command.payload.idMap);
+      assertRect(command.payload.rect, null);
+      for (const sourceId of sourceIds) {
+        const sourceBox = requireContentBox(state, sourceId);
+        const cloneId = command.payload.idMap[sourceId];
+        const originId = sourceBox.cloneSourceId ?? sourceBox.id;
+        const { name, ordinal } = nextCloneIdentity(state, originId);
+        const clone = structuredClone(sourceBox);
+        clone.id = cloneId;
+        clone.viewId = targetView.id;
+        clone.parentId = sourceId === source.id ? null : command.payload.idMap[sourceBox.parentId!];
+        clone.name = name;
+        clone.cloneSourceId = originId;
+        clone.cloneOrdinal = ordinal;
+        if (sourceId === source.id) clone.layoutRects[command.payload.layout] = { ...command.payload.rect };
+        state.boxes[cloneId] = clone;
+      }
       break;
     }
     case "box.delete": {
@@ -461,6 +588,12 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       if (Object.values(state.boxes).some((candidate) => candidate.parentId === box.id)) {
         throw new DomainError("box.delete.hasChildren");
       }
+      Object.values(state.boxes)
+        .filter((candidate) => candidate.cloneSourceId === box.id)
+        .forEach((candidate) => {
+          candidate.cloneSourceId = null;
+          candidate.cloneOrdinal = null;
+        });
       delete state.boxes[box.id];
       break;
     }
@@ -504,7 +637,8 @@ function createSystemBox(input: { id: string; name: string; role: Exclude<BoxRol
     childGrid: { columns: 24, visible: false },
     style: { declarations: {}, scopedCss: "" },
     role: input.role,
-    archived: false,
+    cloneSourceId: null,
+    cloneOrdinal: null,
   };
 }
 
@@ -523,6 +657,11 @@ function localeMessagesFromBoxes(boxes: Record<string, BoxNode>) {
       .filter((box): box is BoxNode & { labelKey: string } => box.labelKey !== null)
       .map((box) => [box.labelKey, box.name]),
   );
+}
+
+function addCloneNameTemplates(messages: Record<string, string>, templates: CloneNameTemplates) {
+  messages[CLONE_NAME_KEY] = normalizedName(templates.first);
+  messages[CLONE_NAME_NUMBERED_KEY] = normalizedName(templates.numbered);
 }
 
 function layoutRectsFrom(rect: GridRect): Record<DeviceKind, GridRect> {
@@ -606,9 +745,9 @@ function requireBox(state: WorkspaceState, boxId: string) {
   return box;
 }
 
-function requireSurfaceBox(state: WorkspaceState, boxId: string, archived: boolean) {
+function requireContentBox(state: WorkspaceState, boxId: string) {
   const box = requireBox(state, boxId);
-  if (box.archived !== archived) throw new DomainError(archived ? "box.notArchived" : "box.archived");
+  if (box.role.type !== "content") throw new DomainError("box.content.required");
   return box;
 }
 
@@ -626,11 +765,12 @@ function assertUniqueBoxName(state: WorkspaceState, name: string, exceptId: stri
   }
 }
 
-function assertRect(rect: GridRect, columns: number) {
+function assertRect(rect: GridRect, columns: number | null) {
   const values = [rect.column, rect.row, rect.width, rect.height];
   if (!values.every(Number.isInteger)) throw new DomainError("box.rect.integerRequired");
-  if (rect.column < 0 || rect.row < 0 || rect.width < 1 || rect.height < 1) throw new DomainError("box.rect.invalid");
-  if (rect.column + rect.width > columns) throw new DomainError("box.rect.outOfBounds");
+  if (rect.width < 1 || rect.height < 1) throw new DomainError("box.rect.invalid");
+  if (columns !== null && (rect.column < 0 || rect.row < 0)) throw new DomainError("box.rect.invalid");
+  if (columns !== null && rect.column + rect.width > columns) throw new DomainError("box.rect.outOfBounds");
 }
 
 function parentColumns(state: WorkspaceState, box: BoxNode) {
@@ -638,7 +778,9 @@ function parentColumns(state: WorkspaceState, box: BoxNode) {
 }
 
 function rootColumns(state: WorkspaceState, box: BoxNode) {
-  return box.viewId ? requireView(state, box.viewId).grid.columns : requireView(state, state.activeViewId).grid.columns;
+  if (box.viewId) requireView(state, box.viewId);
+  else requireView(state, state.activeViewId);
+  return null;
 }
 
 function isDescendant(state: WorkspaceState, candidateId: string, ancestorId: string) {
@@ -650,9 +792,82 @@ function isDescendant(state: WorkspaceState, candidateId: string, ancestorId: st
   return false;
 }
 
-function setArchivedForSubtree(state: WorkspaceState, boxId: string, archived: boolean) {
-  requireBox(state, boxId).archived = archived;
+function descendantIds(state: WorkspaceState, boxId: string): string[] {
+  const children = Object.values(state.boxes).filter((box) => box.parentId === boxId);
+  return children.flatMap((box) => [box.id, ...descendantIds(state, box.id)]);
+}
+
+function setViewForSubtree(state: WorkspaceState, boxId: string, viewId: string) {
+  requireBox(state, boxId).viewId = viewId;
   Object.values(state.boxes)
     .filter((box) => box.parentId === boxId)
-    .forEach((box) => setArchivedForSubtree(state, box.id, archived));
+    .forEach((box) => setViewForSubtree(state, box.id, viewId));
+}
+
+function assertCloneIdMap(state: WorkspaceState, sourceIds: string[], idMap: Record<string, string>) {
+  const mappedSourceIds = Object.keys(idMap);
+  if (mappedSourceIds.length !== sourceIds.length || sourceIds.some((sourceId) => !idMap[sourceId])) {
+    throw new DomainError("box.clone.idMap.invalid");
+  }
+  const cloneIds = Object.values(idMap).map(requiredId);
+  if (new Set(cloneIds).size !== cloneIds.length || cloneIds.some((cloneId) => state.boxes[cloneId])) {
+    throw new DomainError("box.id.duplicate");
+  }
+}
+
+function nextCloneIdentity(state: WorkspaceState, originId: string) {
+  const origin = requireContentBox(state, originId);
+  if (origin.cloneSourceId) throw new DomainError("box.clone.origin.invalid");
+  const occupiedOrdinals = Object.values(state.boxes)
+    .filter((box) => box.cloneSourceId === originId && box.cloneOrdinal !== null)
+    .map((box) => box.cloneOrdinal as number);
+  let ordinal = Math.max(0, ...occupiedOrdinals) + 1;
+  let name = cloneName(state, origin.name, ordinal);
+  while (Object.values(state.boxes).some((box) => canonicalName(box.name) === canonicalName(name))) {
+    ordinal += 1;
+    name = cloneName(state, origin.name, ordinal);
+  }
+  return { name, ordinal };
+}
+
+function cloneName(state: WorkspaceState, sourceName: string, ordinal: number) {
+  const template = state.localeMessages[ordinal === 1 ? CLONE_NAME_KEY : CLONE_NAME_NUMBERED_KEY];
+  if (!template) throw new DomainError("localization.cloneName.missing");
+  return normalizedName(template
+    .replaceAll("{name}", sourceName)
+    .replaceAll("{count}", String(ordinal)));
+}
+
+function linkedClones(state: WorkspaceState, sourceId: string) {
+  return Object.values(state.boxes)
+    .filter((box) => box.cloneSourceId === sourceId)
+    .sort((left, right) => (left.cloneOrdinal ?? 0) - (right.cloneOrdinal ?? 0));
+}
+
+function assertRenameWithClonesIsUnique(state: WorkspaceState, source: BoxNode, name: string) {
+  const clones = linkedClones(state, source.id);
+  const affectedIds = new Set([source.id, ...clones.map((clone) => clone.id)]);
+  const candidateNames = [name, ...clones.map((clone) => cloneName(state, name, clone.cloneOrdinal!))];
+  const canonicalCandidates = candidateNames.map(canonicalName);
+  if (new Set(canonicalCandidates).size !== canonicalCandidates.length) throw new DomainError("box.name.duplicate");
+  if (Object.values(state.boxes).some((box) =>
+    !affectedIds.has(box.id) && canonicalCandidates.includes(canonicalName(box.name)))) {
+    throw new DomainError("box.name.duplicate");
+  }
+}
+
+function renameLinkedClones(state: WorkspaceState, sourceId: string, sourceName: string) {
+  linkedClones(state, sourceId).forEach((clone) => {
+    clone.name = cloneName(state, sourceName, clone.cloneOrdinal!);
+  });
+}
+
+function recomputeCloneNames(state: WorkspaceState) {
+  const clonedState = structuredClone(state);
+  const sources = Object.values(clonedState.boxes).filter((box) => box.cloneSourceId === null);
+  for (const source of sources) {
+    assertRenameWithClonesIsUnique(clonedState, source, source.name);
+    renameLinkedClones(clonedState, source.id, source.name);
+  }
+  state.boxes = clonedState.boxes;
 }

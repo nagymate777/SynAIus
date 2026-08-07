@@ -5,12 +5,14 @@ import type {
   FormEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   applyWorkspaceCommand,
   createWorkspace,
   isProtectedBox,
   type BoxNode,
+  type CloneNameTemplates,
   type CommandPayload,
   type DeviceKind,
   type DeviceNames,
@@ -24,6 +26,7 @@ import {
   gridDeltaFromClient,
   gridPointFromClient,
   moveRect,
+  nearestGridPointFromClient,
   readGridMetrics,
   rectAtPoint,
   resizeRectFromEnd,
@@ -47,6 +50,16 @@ import {
   workspaceWithRevision,
   type EditorState,
 } from "./editor-history";
+import {
+  DEFAULT_CANVAS_VIEWPORT,
+  canvasCellSize,
+  canvasViewportKey,
+  loadCanvasViewports,
+  rootGridMetrics,
+  saveCanvasViewports,
+  zoomViewportAt,
+  type CanvasViewport,
+} from "./canvas-viewport";
 
 const t = createTranslator(hu);
 const deviceNames: DeviceNames = {
@@ -54,10 +67,14 @@ const deviceNames: DeviceNames = {
   tablet: t("device.tablet"),
   mobile: t("device.mobile"),
 };
+const cloneNameTemplates: CloneNameTemplates = {
+  first: t("box.cloneName", { name: "{name}" }),
+  numbered: t("box.cloneNameNumbered", { name: "{name}", count: "{count}" }),
+};
 
 type DragMode = "move" | "resize-start" | "resize-end";
 type ContextMode = "actions" | "rename" | "label" | "delete" | "copy-layout" | "snapshots" | "import";
-type Surface = "main" | "background";
+type ClipboardMode = "cut" | "clone";
 
 interface DragState {
   boxId: string;
@@ -68,6 +85,20 @@ interface DragState {
   startRect: GridRect;
   previewRect: GridRect;
   metrics: GridMetrics;
+}
+
+interface PanDragState {
+  pointerId: number;
+  storageKey: string;
+  startClientX: number;
+  startClientY: number;
+  startViewport: CanvasViewport;
+  previewViewport: CanvasViewport;
+}
+
+interface BoxClipboard {
+  mode: ClipboardMode;
+  boxId: string;
 }
 
 interface ContextState {
@@ -83,19 +114,37 @@ interface ContextState {
 
 type GridStyle = CSSProperties & { "--grid-columns": number };
 type ContextMenuStyle = CSSProperties & { "--menu-top": string };
+type CanvasStyle = CSSProperties & {
+  "--grid-size": string;
+  "--grid-offset-x": string;
+  "--grid-offset-y": string;
+};
+type CanvasWorldStyle = CSSProperties & { transform: string };
 
 export function App() {
   const [editor, setEditor] = useState<EditorState>(() => createEditorState(createInitialWorkspace()));
   const workspace = editor.workspace;
-  const [surface, setSurface] = useState<Surface>("main");
-  const [snapshots, setSnapshots] = useState<WorkspaceSnapshot[]>(loadWorkspaceSnapshots);
+  const activeView = workspace.views[workspace.activeViewId];
+  const viewportStorageKey = canvasViewportKey(activeView.id, workspace.activeLayout);
+  const [viewports, setViewports] = useState(loadCanvasViewports);
+  const [snapshots, setSnapshots] = useState<WorkspaceSnapshot[]>(() =>
+    loadWorkspaceSnapshots(deviceNames, workspace.activeLayout, cloneNameTemplates));
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [panDrag, setPanDrag] = useState<PanDragState | null>(null);
+  const [clipboard, setClipboard] = useState<BoxClipboard | null>(null);
   const [context, setContext] = useState<ContextState | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const panDragRef = useRef<PanDragState | null>(null);
+  const rightButtonHeldRef = useRef(false);
+  const suppressContextMenuRef = useRef(false);
   const suppressSystemClickRef = useRef(false);
   const canvasRef = useRef<HTMLElement | null>(null);
   const workspaceRef = useRef(workspace);
+  const savedViewport = viewports[viewportStorageKey] ?? DEFAULT_CANVAS_VIEWPORT;
+  const viewport = panDrag?.previewViewport ?? savedViewport;
+  const viewportRef = useRef(viewport);
   workspaceRef.current = workspace;
+  viewportRef.current = viewport;
 
   document.title = t("app.title");
 
@@ -108,15 +157,29 @@ export function App() {
   }, [snapshots]);
 
   useEffect(() => {
+    saveCanvasViewports(viewports);
+  }, [viewports]);
+
+  useEffect(() => {
+    if (clipboard && (!workspace.boxes[clipboard.boxId]
+      || workspace.boxes[clipboard.boxId].role.type !== "content")) setClipboard(null);
+  }, [clipboard, workspace.boxes]);
+
+  useEffect(() => {
     function onPointerMove(event: PointerEvent) {
-      if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
-      event.preventDefault();
-      updateDragAt(event.clientX, event.clientY);
+      if (dragRef.current?.pointerId === event.pointerId) {
+        event.preventDefault();
+        updateDragAt(event.clientX, event.clientY);
+      } else if (panDragRef.current?.pointerId === event.pointerId) {
+        event.preventDefault();
+        updatePanAt(event.clientX, event.clientY);
+      }
     }
 
     function onPointerUp(event: PointerEvent) {
-      if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
-      finishDragAt(event.clientX, event.clientY);
+      if (dragRef.current?.pointerId === event.pointerId) finishDragAt(event.clientX, event.clientY);
+      if (panDragRef.current?.pointerId === event.pointerId) finishPan();
+      if (event.button === 2) rightButtonHeldRef.current = false;
     }
 
     function onMouseMove(event: MouseEvent) {
@@ -132,6 +195,14 @@ export function App() {
 
     function onPointerCancel() {
       cancelDrag();
+      cancelPan();
+      rightButtonHeldRef.current = false;
+    }
+
+    function onWindowBlur() {
+      cancelDrag();
+      cancelPan();
+      rightButtonHeldRef.current = false;
     }
 
     window.addEventListener("pointermove", onPointerMove, { passive: false });
@@ -139,12 +210,14 @@ export function App() {
     window.addEventListener("pointercancel", onPointerCancel);
     window.addEventListener("mousemove", onMouseMove, { passive: false });
     window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("blur", onWindowBlur);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerCancel);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onWindowBlur);
     };
   }, []);
 
@@ -199,6 +272,44 @@ export function App() {
     setContext(null);
   }
 
+  function selectClipboard(mode: ClipboardMode, boxId: string) {
+    const box = workspace.boxes[boxId];
+    if (!box || box.role.type !== "content") return;
+    setClipboard({ mode, boxId });
+    setContext(null);
+  }
+
+  function pasteClipboard() {
+    if (!clipboard || !context) return;
+    const source = workspace.boxes[clipboard.boxId];
+    if (!source || source.role.type !== "content") {
+      setClipboard(null);
+      setContext(null);
+      return;
+    }
+    const sourceRect = source.layoutRects[workspace.activeLayout];
+    const rect = rectAtPoint(context.point, sourceRect.width, sourceRect.height, null);
+    if (clipboard.mode === "cut") {
+      send("box.cutPaste", {
+        boxId: source.id,
+        targetViewId: activeView.id,
+        layout: workspace.activeLayout,
+        rect,
+      });
+      setClipboard(null);
+    } else {
+      const sourceIds = [source.id, ...descendantIds(workspace, source.id)];
+      send("box.clonePaste", {
+        sourceBoxId: source.id,
+        targetViewId: activeView.id,
+        layout: workspace.activeLayout,
+        rect,
+        idMap: Object.fromEntries(sourceIds.map((sourceId) => [sourceId, crypto.randomUUID()])),
+      });
+    }
+    setContext(null);
+  }
+
   function createSnapshot() {
     const name = nextAvailableName("snapshot.generatedName", snapshots.map((snapshot) => snapshot.name));
     setSnapshots((current) => [createWorkspaceSnapshot(workspace, name), ...current].slice(0, 30));
@@ -228,7 +339,12 @@ export function App() {
   async function importWorkspace(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const imported = parseWorkspaceExport(await file.text(), deviceNames, workspace.activeLayout);
+    const imported = parseWorkspaceExport(
+      await file.text(),
+      deviceNames,
+      workspace.activeLayout,
+      cloneNameTemplates,
+    );
     if (!imported) {
       setContext((current) => current ? { ...current, errorKey: "workspace.import.invalid" } : current);
       event.target.value = "";
@@ -238,17 +354,14 @@ export function App() {
     setContext(null);
   }
 
-  const activeView = workspace.views[workspace.activeViewId];
-  const surfaceArchived = surface === "background";
-  const surfaceBoxes = useMemo(
-    () => Object.values(workspace.boxes).filter((box) =>
-      (box.viewId === null || box.viewId === activeView.id) && box.archived === surfaceArchived),
-    [activeView.id, surfaceArchived, workspace.boxes],
+  const visibleBoxes = useMemo(
+    () => Object.values(workspace.boxes).filter((box) => box.viewId === null || box.viewId === activeView.id),
+    [activeView.id, workspace.boxes],
   );
-  const surfaceBoxIds = useMemo(() => new Set(surfaceBoxes.map((box) => box.id)), [surfaceBoxes]);
+  const visibleBoxIds = useMemo(() => new Set(visibleBoxes.map((box) => box.id)), [visibleBoxes]);
   const visibleRootBoxes = useMemo(
-    () => surfaceBoxes.filter((box) => box.parentId === null || !surfaceBoxIds.has(box.parentId)),
-    [surfaceBoxes, surfaceBoxIds],
+    () => visibleBoxes.filter((box) => box.parentId === null || !visibleBoxIds.has(box.parentId)),
+    [visibleBoxes, visibleBoxIds],
   );
   const contextBox = context?.boxId ? workspace.boxes[context.boxId] : null;
   const contextBoxHasChildren = contextBox
@@ -279,11 +392,11 @@ export function App() {
     commitWorkspace((current) => {
       const view = current.views[current.activeViewId];
       const parent = parentId ? current.boxes[parentId] : null;
-      const columns = parent?.childGrid.columns ?? view.grid.columns;
+      const columns = parent?.childGrid.columns ?? null;
       const occupiedNames = Object.values(current.boxes).map((box) => box.name);
       const contentCount = Object.values(current.boxes).filter((box) => box.role.type === "content").length;
       const fallbackPoint = {
-        column: contentCount % Math.max(1, columns - 5),
+        column: (contentCount % 4) * 6,
         row: 3 + Math.floor(contentCount / 4) * 4,
       };
       return applyWorkspaceCommand(current, {
@@ -304,11 +417,15 @@ export function App() {
 
   function openCanvasContext(event: ReactMouseEvent<HTMLElement>) {
     event.preventDefault();
+    if (suppressContextMenuRef.current) {
+      suppressContextMenuRef.current = false;
+      return;
+    }
     if (!canvasRef.current) return;
-    const metrics = readGridMetrics(canvasRef.current, activeView.grid.columns);
+    const metrics = rootGridMetrics(canvasRef.current, viewportRef.current, canvasCellSize(canvasRef.current));
     setContext({
       boxId: null,
-      point: gridPointFromClient(metrics, event.clientX, event.clientY),
+      point: nearestGridPointFromClient(metrics, event.clientX, event.clientY),
       ...menuPosition(event.clientX, event.clientY),
       mode: "actions",
       draftName: "",
@@ -320,9 +437,15 @@ export function App() {
   function openBoxContext(event: ReactMouseEvent<HTMLElement>, box: BoxNode) {
     event.preventDefault();
     event.stopPropagation();
+    if (suppressContextMenuRef.current) {
+      suppressContextMenuRef.current = false;
+      return;
+    }
+    if (!canvasRef.current) return;
+    const metrics = rootGridMetrics(canvasRef.current, viewportRef.current, canvasCellSize(canvasRef.current));
     setContext({
       boxId: box.id,
-      point: { column: 0, row: 0 },
+      point: nearestGridPointFromClient(metrics, event.clientX, event.clientY),
       ...menuPosition(event.clientX, event.clientY),
       mode: "actions",
       draftName: box.name,
@@ -352,9 +475,67 @@ export function App() {
     setContext(null);
   }
 
-  function switchSurface(nextSurface: Surface) {
-    setSurface(nextSurface);
+  function beginCanvasPointer(event: ReactPointerEvent<HTMLElement>) {
+    if (event.button === 2) {
+      rightButtonHeldRef.current = true;
+      suppressContextMenuRef.current = false;
+      return;
+    }
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".canvas-box")) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const nextPan: PanDragState = {
+      pointerId: event.pointerId,
+      storageKey: viewportStorageKey,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startViewport: viewportRef.current,
+      previewViewport: viewportRef.current,
+    };
+    panDragRef.current = nextPan;
+    setPanDrag(nextPan);
     setContext(null);
+  }
+
+  function updatePanAt(clientX: number, clientY: number) {
+    const current = panDragRef.current;
+    if (!current) return;
+    const previewViewport = {
+      ...current.startViewport,
+      panX: current.startViewport.panX + clientX - current.startClientX,
+      panY: current.startViewport.panY + clientY - current.startClientY,
+    };
+    const nextPan = { ...current, previewViewport };
+    panDragRef.current = nextPan;
+    setPanDrag(nextPan);
+  }
+
+  function finishPan() {
+    const current = panDragRef.current;
+    if (!current) return;
+    panDragRef.current = null;
+    setPanDrag(null);
+    setViewports((stored) => ({ ...stored, [current.storageKey]: current.previewViewport }));
+  }
+
+  function cancelPan() {
+    panDragRef.current = null;
+    setPanDrag(null);
+  }
+
+  function zoomCanvas(event: ReactWheelEvent<HTMLElement>) {
+    if (!rightButtonHeldRef.current || !canvasRef.current) return;
+    event.preventDefault();
+    suppressContextMenuRef.current = true;
+    const bounds = canvasRef.current.getBoundingClientRect();
+    const next = zoomViewportAt(
+      viewportRef.current,
+      event.clientX - bounds.left,
+      event.clientY - bounds.top,
+      event.deltaY,
+    );
+    viewportRef.current = next;
+    setViewports((stored) => ({ ...stored, [viewportStorageKey]: next }));
   }
 
   function beginBoxMove(event: ReactPointerEvent<HTMLElement>, box: BoxNode) {
@@ -368,7 +549,7 @@ export function App() {
 
   function beginDrag(event: ReactPointerEvent<HTMLElement>, box: BoxNode, mode: DragMode) {
     if (event.button !== 0) return;
-    const grid = findGridElement(box.parentId);
+    const grid = box.parentId ? findGridElement(box.parentId) : canvasRef.current;
     if (!grid) return;
     event.preventDefault();
     event.stopPropagation();
@@ -383,7 +564,9 @@ export function App() {
       startClientY: event.clientY,
       startRect: rect,
       previewRect: rect,
-      metrics: readGridMetrics(grid, parent?.childGrid.columns ?? activeView.grid.columns),
+      metrics: parent
+        ? readGridMetrics(grid, parent.childGrid.columns)
+        : rootGridMetrics(grid, viewportRef.current, canvasCellSize(grid)),
     };
     dragRef.current = nextDrag;
     setDrag(nextDrag);
@@ -455,9 +638,8 @@ export function App() {
       }
     }
 
-    const currentView = currentWorkspace.views[currentWorkspace.activeViewId];
     if (!targetParentId && box.parentId !== null && canvasRef.current && pointIsInside(canvasRef.current, clientX, clientY)) {
-      const metrics = readGridMetrics(canvasRef.current, currentView.grid.columns);
+      const metrics = rootGridMetrics(canvasRef.current, viewportRef.current, canvasCellSize(canvasRef.current));
       send("box.nest", {
         boxId: box.id,
         parentId: null,
@@ -466,7 +648,7 @@ export function App() {
           gridPointFromClient(metrics, clientX, clientY),
           boxRect.width,
           boxRect.height,
-          currentView.grid.columns,
+          null,
         ),
       });
       return;
@@ -494,8 +676,7 @@ export function App() {
       if (target
         && !forbidden.has(target.id)
         && target.role.type === "content"
-        && target.viewId === box.viewId
-        && target.archived === box.archived) return target.id;
+        && target.viewId === box.viewId) return target.id;
     }
     return null;
   }
@@ -512,21 +693,33 @@ export function App() {
   }
 
   function renderBox(box: BoxNode) {
-    const children = surfaceBoxes.filter((candidate) => candidate.parentId === box.id);
+    const children = visibleBoxes.filter((candidate) => candidate.parentId === box.id);
     const renderedRect = drag?.boxId === box.id ? drag.previewRect : box.layoutRects[workspace.activeLayout];
     const label = localizedBoxLabel(workspace, box);
+    const geometry: CSSProperties = box.parentId
+      ? {
+          gridColumn: `${renderedRect.column + 1} / span ${renderedRect.width}`,
+          gridRow: `${renderedRect.row + 1} / span ${renderedRect.height}`,
+        }
+      : {
+          position: "absolute",
+          left: `calc(${renderedRect.column} * var(--cell-size))`,
+          top: `calc(${renderedRect.row} * var(--cell-size))`,
+          width: `calc(${renderedRect.width} * var(--cell-size))`,
+          height: `calc(${renderedRect.height} * var(--cell-size))`,
+        };
     return (
       <article
         className="canvas-box"
         data-box-id={box.id}
         data-box-role={box.role.type}
         data-dragging={drag?.boxId === box.id}
+        data-clipboard-mode={clipboard?.boxId === box.id ? clipboard.mode : undefined}
         key={box.id}
         onContextMenu={(event) => openBoxContext(event, box)}
         onPointerDown={(event) => beginBoxMove(event, box)}
         style={{
-          gridColumn: `${renderedRect.column + 1} / span ${renderedRect.width}`,
-          gridRow: `${renderedRect.row + 1} / span ${renderedRect.height}`,
+          ...geometry,
           ...box.style.declarations,
         }}
       >
@@ -572,21 +765,30 @@ export function App() {
       className="portal-shell"
       data-handles-visible={workspace.preferences.handlesVisible}
       data-names-visible={workspace.preferences.namesVisible}
-      data-surface={surface}
       data-layout={workspace.activeLayout}
     >
       <section
         className="canvas"
         data-grid-visible={activeView.grid.visible}
-        style={{ "--grid-columns": activeView.grid.columns } as GridStyle}
-        aria-label={t(surface === "main" ? "canvas.label" : "surface.backgroundLabel")}
+        data-panning={panDrag !== null}
+        style={{
+          "--grid-size": `calc(var(--cell-size) * ${viewport.zoom})`,
+          "--grid-offset-x": `${viewport.panX}px`,
+          "--grid-offset-y": `${viewport.panY}px`,
+        } as CanvasStyle}
+        aria-label={t("canvas.label")}
         onContextMenu={openCanvasContext}
+        onPointerDown={beginCanvasPointer}
+        onWheel={zoomCanvas}
         ref={canvasRef}
       >
-        {visibleRootBoxes.map(renderBox)}
+        <div
+          className="canvas-world"
+          style={{ transform: `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})` } as CanvasWorldStyle}
+        >
+          {visibleRootBoxes.map(renderBox)}
+        </div>
       </section>
-
-      {surface === "background" && <div className="surface-badge">{t("surface.background")}</div>}
 
       {context && (
         <>
@@ -600,7 +802,23 @@ export function App() {
           >
             {context.mode === "actions" && (
               <>
-                {workspace.preferences.handlesVisible && surface === "main" && (
+                {workspace.preferences.handlesVisible && clipboard && (
+                  <button role="menuitem" onClick={pasteClipboard}>
+                    {t(clipboard.mode === "cut" ? "action.pasteCut" : "action.pasteClone")}
+                  </button>
+                )}
+                {workspace.preferences.handlesVisible && clipboard && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setClipboard(null);
+                      setContext(null);
+                    }}
+                  >
+                    {t(clipboard.mode === "cut" ? "action.cancelCut" : "action.cancelClone")}
+                  </button>
+                )}
+                {workspace.preferences.handlesVisible && (
                   <button
                     role="menuitem"
                     onClick={() => addBox(
@@ -637,7 +855,9 @@ export function App() {
                 <button
                   role="menuitem"
                   onClick={() => {
-                    send("workspace.handles.set", { visible: !workspace.preferences.handlesVisible });
+                    const visible = !workspace.preferences.handlesVisible;
+                    send("workspace.handles.set", { visible });
+                    if (!visible) setClipboard(null);
                     setContext(null);
                   }}
                 >
@@ -662,13 +882,6 @@ export function App() {
                     {t("action.importWorkspace")}
                   </button>
                 )}
-                <button
-                  className="surface-menu-item"
-                  role="menuitem"
-                  onClick={() => switchSurface(surface === "main" ? "background" : "main")}
-                >
-                  {t(surface === "main" ? "action.openBackground" : "action.openMain")}
-                </button>
 
                 {workspace.preferences.handlesVisible && contextBox && (
                   <>
@@ -688,39 +901,31 @@ export function App() {
                         {t("action.setDefaultView", { layout: deviceNames[workspace.activeLayout] })}
                       </button>
                     )}
-                    <button role="menuitem" onClick={() => setContext({ ...context, mode: "rename" })}>
-                      {t("action.renameBox")}
-                    </button>
+                    {!contextBox.cloneSourceId && (
+                      <button role="menuitem" onClick={() => setContext({ ...context, mode: "rename" })}>
+                        {t("action.renameBox")}
+                      </button>
+                    )}
                     {contextBox.labelKey && (
                       <button role="menuitem" onClick={() => setContext({ ...context, mode: "label" })}>
                         {t("action.editBoxLabel")}
                       </button>
                     )}
-                    {surface === "main" ? (
+                    {contextBox.role.type === "content" && (
+                      <>
                       <button
                         role="menuitem"
-                        onClick={() => {
-                          send("box.archive", { boxId: contextBox.id });
-                          setContext(null);
-                        }}
+                        onClick={() => selectClipboard("cut", contextBox.id)}
                       >
-                        {t("action.archiveBox")}
+                        {t("action.cutBox")}
                       </button>
-                    ) : (
                       <button
                         role="menuitem"
-                        onClick={() => {
-                          send("box.restore", {
-                            boxId: contextBox.id,
-                            parentId: null,
-                            layout: workspace.activeLayout,
-                            rect: contextBox.layoutRects[workspace.activeLayout],
-                          });
-                          setContext(null);
-                        }}
+                        onClick={() => selectClipboard("clone", contextBox.id)}
                       >
-                        {t("action.restoreBox")}
+                        {t("action.cloneBox")}
                       </button>
+                      </>
                     )}
                     {!isProtectedBox(contextBox) && (
                       <button
@@ -862,9 +1067,10 @@ function createInitialWorkspace() {
     initialViewId: "view-main",
     initialViewName: t("view.defaultName"),
     deviceNames,
+    cloneNameTemplates,
     initialLayout: detectedLayout,
   });
-  let workspace = loadWorkspace(fallback, deviceNames, detectedLayout);
+  let workspace = loadWorkspace(fallback, deviceNames, detectedLayout, cloneNameTemplates);
   if (workspace.activeLayout !== detectedLayout) {
     workspace = applyWorkspaceCommand(workspace, {
       id: crypto.randomUUID(),

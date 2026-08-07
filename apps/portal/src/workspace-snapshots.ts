@@ -1,5 +1,5 @@
-import type { DeviceKind, DeviceNames, WorkspaceState } from "@synaius/domain";
-import { isWorkspaceState, upgradeWorkspaceState } from "./workspace-storage";
+import type { CloneNameTemplates, DeviceKind, DeviceNames, WorkspaceState } from "@synaius/domain";
+import { upgradeWorkspaceState } from "./workspace-storage";
 
 export const WORKSPACE_SNAPSHOTS_STORAGE_KEY = "synaius.workspace-snapshots.v1";
 
@@ -10,13 +10,21 @@ export interface WorkspaceSnapshot {
   workspace: WorkspaceState;
 }
 
-export function loadWorkspaceSnapshots(): WorkspaceSnapshot[] {
+export function loadWorkspaceSnapshots(
+  deviceNames: DeviceNames,
+  activeLayout: DeviceKind,
+  cloneNameTemplates: CloneNameTemplates,
+): WorkspaceSnapshot[] {
   try {
     const raw = localStorage.getItem(WORKSPACE_SNAPSHOTS_STORAGE_KEY);
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isWorkspaceSnapshot);
+    return parsed.flatMap((value) => {
+      if (!isSnapshotMetadata(value)) return [];
+      const workspace = upgradeWorkspaceState(value.workspace, deviceNames, activeLayout, cloneNameTemplates);
+      return workspace ? [{ ...value, workspace }] : [];
+    });
   } catch {
     return [];
   }
@@ -44,21 +52,23 @@ export function parseWorkspaceExport(
   text: string,
   deviceNames: DeviceNames,
   activeLayout: DeviceKind,
+  cloneNameTemplates: CloneNameTemplates,
 ): WorkspaceState | null {
   try {
     const parsed: unknown = JSON.parse(text);
-    return upgradeWorkspaceState(parsed, deviceNames, activeLayout);
+    return upgradeWorkspaceState(parsed, deviceNames, activeLayout, cloneNameTemplates);
   } catch {
     return null;
   }
 }
 
-function isWorkspaceSnapshot(value: unknown): value is WorkspaceSnapshot {
+function isSnapshotMetadata(value: unknown): value is Omit<WorkspaceSnapshot, "workspace"> & { workspace: unknown } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const candidate = value as Partial<WorkspaceSnapshot>;
   return typeof candidate.id === "string"
     && typeof candidate.name === "string"
     && typeof candidate.createdAt === "string"
     && Number.isFinite(Date.parse(candidate.createdAt))
-    && isWorkspaceState(candidate.workspace);
+    && typeof candidate.workspace === "object"
+    && candidate.workspace !== null;
 }

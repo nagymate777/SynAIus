@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { applyWorkspaceCommand, createWorkspace, DomainError, type WorkspaceCommand, type WorkspaceState } from "@synaius/domain";
 
 function initial() {
-  return createWorkspace({ workspaceId: "workspace", initialViewId: "main", initialViewName: "Alapnézet" });
+  return createWorkspace({
+    workspaceId: "workspace",
+    initialViewId: "main",
+    initialViewName: "Alapnézet",
+    cloneNameTemplates: { first: "{name} klónja", numbered: "{name} {count}. klónja" },
+  });
 }
 
 function apply(state: WorkspaceState, command: Omit<WorkspaceCommand, "id" | "expectedRevision">) {
@@ -24,7 +29,7 @@ describe("workspace command core", () => {
   it("creates protected global view and device control boxes on the dense grid", () => {
     const state = initial();
     const systemBoxes = Object.values(state.boxes).filter((box) => box.role.type !== "content");
-    expect(state.schemaVersion).toBe(4);
+    expect(state.schemaVersion).toBe(5);
     expect(state.activeLayout).toBe("desktop");
     expect(state.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(state.views.main.grid.columns).toBe(24);
@@ -88,26 +93,113 @@ describe("workspace command core", () => {
     })).toThrowError(new DomainError("box.parent.cycle"));
   });
 
-  it("archives and restores a box without deleting its identity or style", () => {
+  it("cuts and pastes a box into another view without losing identity or style", () => {
     let state = withTwoBoxes();
+    state = apply(state, { type: "view.create", payload: { viewId: "other", name: "Másik" } });
     state = apply(state, { type: "box.style.patch", payload: { boxId: "child", declarations: { color: "#fff" } } });
-    state = apply(state, { type: "box.archive", payload: { boxId: "child" } });
-    expect(state.boxes.child.archived).toBe(true);
-    state = apply(state, { type: "box.restore", payload: { boxId: "child", parentId: null, layout: "desktop", rect: { column: 6, row: 0, width: 3, height: 3 } } });
-    expect(state.boxes.child.archived).toBe(false);
+    state = apply(state, {
+      type: "box.cutPaste",
+      payload: {
+        boxId: "child",
+        targetViewId: "other",
+        layout: "desktop",
+        rect: { column: -6, row: -2, width: 3, height: 3 },
+      },
+    });
+    expect(state.boxes.child.viewId).toBe("other");
+    expect(state.boxes.child.layoutRects.desktop).toEqual({ column: -6, row: -2, width: 3, height: 3 });
     expect(state.boxes.child.style.declarations.color).toBe("#fff");
   });
 
-  it("moves an entire nested subtree between the main and background surfaces", () => {
+  it("moves an entire nested subtree between views", () => {
     let state = withTwoBoxes();
+    state = apply(state, { type: "view.create", payload: { viewId: "other", name: "Másik" } });
     state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", layout: "desktop", rect: { column: 2, row: 1, width: 4, height: 3 } } });
-    state = apply(state, { type: "box.archive", payload: { boxId: "parent" } });
-    expect(state.boxes.parent.archived).toBe(true);
-    expect(state.boxes.child.archived).toBe(true);
-    state = apply(state, { type: "box.move", payload: { boxId: "parent", layout: "desktop", column: 4, row: 5 } });
-    state = apply(state, { type: "box.restore", payload: { boxId: "parent", parentId: null, layout: "desktop", rect: state.boxes.parent.layoutRects.desktop } });
-    expect(state.boxes.parent.archived).toBe(false);
-    expect(state.boxes.child.archived).toBe(false);
+    state = apply(state, {
+      type: "box.cutPaste",
+      payload: { boxId: "parent", targetViewId: "other", layout: "desktop", rect: { column: 4, row: 5, width: 6, height: 6 } },
+    });
+    expect(state.boxes.parent.viewId).toBe("other");
+    expect(state.boxes.child.viewId).toBe("other");
+    expect(state.boxes.child.parentId).toBe("parent");
+  });
+
+  it("deep-clones a subtree and keeps clone names linked to their originals", () => {
+    let state = withTwoBoxes();
+    state = apply(state, { type: "view.create", payload: { viewId: "bedroom", name: "Hálószoba" } });
+    state = apply(state, { type: "box.nest", payload: { boxId: "child", parentId: "parent", layout: "desktop", rect: { column: 2, row: 1, width: 4, height: 3 } } });
+    state = apply(state, {
+      type: "box.clonePaste",
+      payload: {
+        sourceBoxId: "parent",
+        targetViewId: "bedroom",
+        layout: "desktop",
+        rect: { column: 12, row: 8, width: 6, height: 6 },
+        idMap: { parent: "parent-clone", child: "child-clone" },
+      },
+    });
+    expect(state.boxes["parent-clone"].name).toBe("Szülő klónja");
+    expect(state.boxes["parent-clone"].cloneSourceId).toBe("parent");
+    expect(state.boxes["parent-clone"].viewId).toBe("bedroom");
+    expect(state.boxes["child-clone"].parentId).toBe("parent-clone");
+    expect(state.boxes["child-clone"].cloneSourceId).toBe("child");
+
+    state = apply(state, { type: "box.rename", payload: { boxId: "parent", name: "Főkapcsoló" } });
+    expect(state.boxes["parent-clone"].name).toBe("Főkapcsoló klónja");
+    expect(() => apply(state, {
+      type: "box.rename",
+      payload: { boxId: "parent-clone", name: "Külön név" },
+    })).toThrowError(new DomainError("box.rename.clone"));
+
+    state = apply(state, {
+      type: "box.clonePaste",
+      payload: {
+        sourceBoxId: "parent",
+        targetViewId: "main",
+        layout: "desktop",
+        rect: { column: 20, row: 8, width: 6, height: 6 },
+        idMap: { parent: "parent-clone-2", child: "child-clone-2" },
+      },
+    });
+    expect(state.boxes["parent-clone-2"].name).toBe("Főkapcsoló 2. klónja");
+  });
+
+  it("recomputes linked clone names when their localization template changes", () => {
+    let state = withTwoBoxes();
+    state = apply(state, {
+      type: "box.clonePaste",
+      payload: {
+        sourceBoxId: "child",
+        targetViewId: "main",
+        layout: "desktop",
+        rect: { column: 12, row: 4, width: 3, height: 3 },
+        idMap: { child: "child-clone" },
+      },
+    });
+    state = apply(state, {
+      type: "localization.message.set",
+      payload: { key: "box.cloneName", value: "{name} másolata" },
+    });
+    expect(state.boxes["child-clone"].name).toBe("Gyermek másolata");
+  });
+
+  it("turns a clone into an independent box when its original is deleted", () => {
+    let state = withTwoBoxes();
+    state = apply(state, {
+      type: "box.clonePaste",
+      payload: {
+        sourceBoxId: "child",
+        targetViewId: "main",
+        layout: "desktop",
+        rect: { column: 12, row: 4, width: 3, height: 3 },
+        idMap: { child: "child-clone" },
+      },
+    });
+    state = apply(state, { type: "box.delete", payload: { boxId: "child" } });
+    expect(state.boxes["child-clone"].cloneSourceId).toBeNull();
+    expect(state.boxes["child-clone"].cloneOrdinal).toBeNull();
+    state = apply(state, { type: "box.rename", payload: { boxId: "child-clone", name: "Önálló kapcsoló" } });
+    expect(state.boxes["child-clone"].name).toBe("Önálló kapcsoló");
   });
 
   it("records a default view for each device kind", () => {

@@ -3,6 +3,7 @@ import { createWorkspace, type LegacyWorkspaceStateV3 } from "@synaius/domain";
 import { createWorkspaceSnapshot, parseWorkspaceExport } from "../apps/portal/src/workspace-snapshots";
 
 const deviceNames = { desktop: "Asztali gép", tablet: "Táblagép", mobile: "Mobiltelefon" };
+const cloneNameTemplates = { first: "{name} klónja", numbered: "{name} {count}. klónja" };
 
 describe("workspace snapshots", () => {
   it("creates an independent snapshot and accepts a valid export", () => {
@@ -10,7 +11,7 @@ describe("workspace snapshots", () => {
     const snapshot = createWorkspaceSnapshot(workspace, "  Első állapot  ");
     expect(snapshot.name).toBe("Első állapot");
     expect(snapshot.workspace).not.toBe(workspace);
-    expect(parseWorkspaceExport(JSON.stringify(workspace), deviceNames, "desktop")).toEqual(workspace);
+    expect(parseWorkspaceExport(JSON.stringify(workspace), deviceNames, "desktop", cloneNameTemplates)).toEqual(workspace);
   });
 
   it("migrates a valid legacy export and rejects malformed data", () => {
@@ -20,12 +21,12 @@ describe("workspace snapshots", () => {
       ...base,
       schemaVersion: 3,
       boxes: Object.fromEntries(Object.values(boxes).map((box) => {
-        const { labelKey: _labelKey, ...legacyBox } = box;
-        return [box.id, legacyBox];
+        const { labelKey: _labelKey, cloneSourceId: _cloneSourceId, cloneOrdinal: _cloneOrdinal, ...legacyBox } = box;
+        return [box.id, { ...legacyBox, archived: false }];
       })),
     };
-    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop")?.schemaVersion).toBe(4);
-    expect(parseWorkspaceExport("not-json", deviceNames, "desktop")).toBeNull();
-    expect(parseWorkspaceExport(JSON.stringify({ schemaVersion: 2 }), deviceNames, "desktop")).toBeNull();
+    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop", cloneNameTemplates)?.schemaVersion).toBe(5);
+    expect(parseWorkspaceExport("not-json", deviceNames, "desktop", cloneNameTemplates)).toBeNull();
+    expect(parseWorkspaceExport(JSON.stringify({ schemaVersion: 2 }), deviceNames, "desktop", cloneNameTemplates)).toBeNull();
   });
 });

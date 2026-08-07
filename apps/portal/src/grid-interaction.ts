@@ -1,7 +1,7 @@
 import type { GridRect } from "@synaius/domain";
 
 export interface GridMetrics {
-  columns: number;
+  columns: number | null;
   cellWidth: number;
   cellHeight: number;
   contentLeft: number;
@@ -18,14 +18,16 @@ export interface GridPoint {
 export function readGridMetrics(element: HTMLElement, columns: number): GridMetrics {
   const bounds = element.getBoundingClientRect();
   const rowSize = Number.parseFloat(getComputedStyle(element).gridAutoRows);
+  const scaleX = element.offsetWidth > 0 ? bounds.width / element.offsetWidth : 1;
+  const scaleY = element.offsetHeight > 0 ? bounds.height / element.offsetHeight : scaleX;
   return {
     columns,
-    cellWidth: element.clientWidth / columns,
-    cellHeight: Number.isFinite(rowSize) && rowSize > 0 ? rowSize : 32,
-    contentLeft: bounds.left + element.clientLeft,
-    contentTop: bounds.top + element.clientTop,
-    scrollLeft: element.scrollLeft,
-    scrollTop: element.scrollTop,
+    cellWidth: bounds.width / columns,
+    cellHeight: (Number.isFinite(rowSize) && rowSize > 0 ? rowSize : 32) * scaleY,
+    contentLeft: bounds.left + element.clientLeft * scaleX,
+    contentTop: bounds.top + element.clientTop * scaleY,
+    scrollLeft: element.scrollLeft * scaleX,
+    scrollTop: element.scrollTop * scaleY,
   };
 }
 
@@ -33,6 +35,13 @@ export function gridPointFromClient(metrics: GridMetrics, clientX: number, clien
   return {
     column: Math.floor((clientX - metrics.contentLeft + metrics.scrollLeft) / metrics.cellWidth),
     row: Math.floor((clientY - metrics.contentTop + metrics.scrollTop) / metrics.cellHeight),
+  };
+}
+
+export function nearestGridPointFromClient(metrics: GridMetrics, clientX: number, clientY: number): GridPoint {
+  return {
+    column: Math.round((clientX - metrics.contentLeft + metrics.scrollLeft) / metrics.cellWidth),
+    row: Math.round((clientY - metrics.contentTop + metrics.scrollTop) / metrics.cellHeight),
   };
 }
 
@@ -49,19 +58,21 @@ export function gridDeltaFromClient(
   };
 }
 
-export function moveRect(rect: GridRect, delta: GridPoint, columns: number): GridRect {
+export function moveRect(rect: GridRect, delta: GridPoint, columns: number | null): GridRect {
   return {
     ...rect,
-    column: clamp(rect.column + delta.column, 0, Math.max(0, columns - rect.width)),
-    row: Math.max(0, rect.row + delta.row),
+    column: columns === null
+      ? rect.column + delta.column
+      : clamp(rect.column + delta.column, 0, Math.max(0, columns - rect.width)),
+    row: columns === null ? rect.row + delta.row : Math.max(0, rect.row + delta.row),
   };
 }
 
-export function resizeRectFromStart(rect: GridRect, delta: GridPoint, columns: number): GridRect {
+export function resizeRectFromStart(rect: GridRect, delta: GridPoint, columns: number | null): GridRect {
   const right = rect.column + rect.width;
   const bottom = rect.row + rect.height;
-  const column = clamp(rect.column + delta.column, 0, right - 1);
-  const row = clamp(rect.row + delta.row, 0, bottom - 1);
+  const column = clamp(rect.column + delta.column, columns === null ? Number.MIN_SAFE_INTEGER : 0, right - 1);
+  const row = clamp(rect.row + delta.row, columns === null ? Number.MIN_SAFE_INTEGER : 0, bottom - 1);
   return {
     column,
     row,
@@ -70,8 +81,10 @@ export function resizeRectFromStart(rect: GridRect, delta: GridPoint, columns: n
   };
 }
 
-export function resizeRectFromEnd(rect: GridRect, delta: GridPoint, columns: number): GridRect {
-  const right = clamp(rect.column + rect.width + delta.column, rect.column + 1, columns);
+export function resizeRectFromEnd(rect: GridRect, delta: GridPoint, columns: number | null): GridRect {
+  const right = columns === null
+    ? Math.max(rect.column + 1, rect.column + rect.width + delta.column)
+    : clamp(rect.column + rect.width + delta.column, rect.column + 1, columns);
   const bottom = Math.max(rect.row + 1, rect.row + rect.height + delta.row);
   return {
     ...rect,
@@ -80,11 +93,11 @@ export function resizeRectFromEnd(rect: GridRect, delta: GridPoint, columns: num
   };
 }
 
-export function rectAtPoint(point: GridPoint, width: number, height: number, columns: number): GridRect {
-  const normalizedWidth = clamp(width, 1, columns);
+export function rectAtPoint(point: GridPoint, width: number, height: number, columns: number | null): GridRect {
+  const normalizedWidth = columns === null ? Math.max(1, width) : clamp(width, 1, columns);
   return {
-    column: clamp(point.column, 0, columns - normalizedWidth),
-    row: Math.max(0, point.row),
+    column: columns === null ? point.column : clamp(point.column, 0, columns - normalizedWidth),
+    row: columns === null ? point.row : Math.max(0, point.row),
     width: normalizedWidth,
     height: Math.max(1, height),
   };

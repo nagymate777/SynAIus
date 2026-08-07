@@ -4,14 +4,17 @@ import {
   migrateWorkspaceV1,
   migrateWorkspaceV2,
   migrateWorkspaceV3,
+  migrateWorkspaceV4,
   type LegacyWorkspaceStateV1,
   type LegacyWorkspaceStateV2,
   type LegacyWorkspaceStateV3,
+  type LegacyWorkspaceStateV4,
 } from "@synaius/domain";
 import {
   isLegacyWorkspaceState,
   isLegacyWorkspaceStateV2,
   isLegacyWorkspaceStateV3,
+  isLegacyWorkspaceStateV4,
   isWorkspaceState,
 } from "../apps/portal/src/workspace-storage";
 
@@ -78,7 +81,7 @@ describe("workspace storage validation", () => {
     };
     expect(isLegacyWorkspaceStateV2(previous)).toBe(true);
     const migrated = migrateWorkspaceV2(previous, "tablet");
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(migrated.activeLayout).toBe("tablet");
     expect(migrated.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(migrated.boxes.content.layoutRects).toEqual({
@@ -95,14 +98,35 @@ describe("workspace storage validation", () => {
       ...base,
       schemaVersion: 3,
       boxes: Object.fromEntries(Object.values(currentBoxes).map((box) => {
-        const { labelKey: _labelKey, ...legacyBox } = box;
-        return [box.id, legacyBox];
+        const { labelKey: _labelKey, cloneSourceId: _cloneSourceId, cloneOrdinal: _cloneOrdinal, ...legacyBox } = box;
+        return [box.id, { ...legacyBox, archived: false }];
       })),
     };
     expect(isLegacyWorkspaceStateV3(previous)).toBe(true);
     const migrated = migrateWorkspaceV3(previous);
     const systemBoxes = Object.values(migrated.boxes).filter((box) => box.role.type !== "content");
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(systemBoxes.every((box) => box.labelKey && migrated.localeMessages[box.labelKey] === box.name)).toBe(true);
+  });
+
+  it("restores archived version-four boxes into regular views", () => {
+    const current = createWorkspace({ workspaceId: "workspace", initialViewId: "main", initialViewName: "Alapnézet" });
+    const { schemaVersion: _schemaVersion, boxes, ...base } = current;
+    const previous: LegacyWorkspaceStateV4 = {
+      ...base,
+      schemaVersion: 4,
+      boxes: Object.fromEntries(Object.values(boxes).map((box) => {
+        const { cloneSourceId: _cloneSourceId, cloneOrdinal: _cloneOrdinal, ...legacyBox } = box;
+        return [box.id, { ...legacyBox, archived: true }];
+      })),
+    };
+    expect(isLegacyWorkspaceStateV4(previous)).toBe(true);
+    const migrated = migrateWorkspaceV4(previous, {
+      first: "{name} klónja",
+      numbered: "{name} {count}. klónja",
+    });
+    expect(migrated.schemaVersion).toBe(5);
+    expect(Object.values(migrated.boxes).every((box) => !("archived" in box))).toBe(true);
+    expect(Object.values(migrated.boxes).every((box) => box.cloneSourceId === null)).toBe(true);
   });
 });
