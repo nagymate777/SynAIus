@@ -36,7 +36,7 @@ describe("editor history", () => {
       rect: { column: 0, row: 4, width: 6, height: 4 },
     }));
     editor = commitEditorState(editor, (current) => applyCommand(current, "layout.activate", {
-      device: "mobile",
+      layoutId: "mobile",
     }), false);
     editor = commitEditorState(editor, (current) => applyCommand(current, "workspace.names.set", {
       visible: false,
@@ -71,5 +71,25 @@ describe("editor history", () => {
       visible: false,
     }), false);
     expect(undoEditorState(editor)).toBe(editor);
+  });
+
+  it("falls back to a valid layout when undo removes the active custom layout", () => {
+    const workspace = createWorkspace({
+      workspaceId: "workspace",
+      initialViewId: "main",
+      initialViewName: "Alapnézet",
+    });
+    let editor = createEditorState(workspace);
+    editor = commitEditorState(editor, (current) => applyCommand(current, "layout.create", {
+      layoutId: "custom:ultrawide",
+      name: "UltraWide",
+      sourceLayoutId: "desktop",
+    }));
+    editor = commitEditorState(editor, (current) => applyCommand(current, "layout.activate", {
+      layoutId: "custom:ultrawide",
+    }), false);
+    editor = undoEditorState(editor);
+    expect(editor.workspace.layouts["custom:ultrawide"]).toBeUndefined();
+    expect(editor.workspace.activeLayout).toBe("desktop");
   });
 });

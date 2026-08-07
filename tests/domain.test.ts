@@ -29,7 +29,7 @@ describe("workspace command core", () => {
   it("creates protected global view and device control boxes on the dense grid", () => {
     const state = initial();
     const systemBoxes = Object.values(state.boxes).filter((box) => box.role.type !== "content");
-    expect(state.schemaVersion).toBe(5);
+    expect(state.schemaVersion).toBe(6);
     expect(state.activeLayout).toBe("desktop");
     expect(state.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(state.views.main.grid.columns).toBe(24);
@@ -205,14 +205,14 @@ describe("workspace command core", () => {
   it("records a default view for each device kind", () => {
     let state = initial();
     state = apply(state, { type: "view.create", payload: { viewId: "mobile", name: "Mobil" } });
-    state = apply(state, { type: "view.setDeviceDefault", payload: { device: "mobile", viewId: "mobile" } });
+    state = apply(state, { type: "view.setLayoutDefault", payload: { layoutId: "mobile", viewId: "mobile" } });
     expect(state.deviceDefaults.mobile).toBe("mobile");
   });
 
   it("keeps independent geometry for each device layout", () => {
     let state = withTwoBoxes();
     state = apply(state, { type: "box.move", payload: { boxId: "parent", layout: "mobile", column: 12, row: 8 } });
-    state = apply(state, { type: "layout.activate", payload: { device: "mobile" } });
+    state = apply(state, { type: "layout.activate", payload: { layoutId: "mobile" } });
     expect(state.activeLayout).toBe("mobile");
     expect(state.boxes.parent.layoutRects.mobile).toEqual({ column: 12, row: 8, width: 6, height: 6 });
     expect(state.boxes.parent.layoutRects.desktop).toEqual({ column: 0, row: 0, width: 6, height: 6 });
@@ -235,11 +235,76 @@ describe("workspace command core", () => {
     expect(state.boxes.child.layoutRects.tablet).toEqual(state.boxes.child.layoutRects.desktop);
   });
 
+  it("creates a custom layout by copying an existing layout", () => {
+    let state = withTwoBoxes();
+    state = apply(state, { type: "box.move", payload: { boxId: "parent", layout: "desktop", column: 14, row: 3 } });
+    state = apply(state, {
+      type: "layout.create",
+      payload: { layoutId: "custom:ultrawide", name: "UltraWide", sourceLayoutId: "desktop" },
+    });
+    expect(state.layoutOrder).toEqual(["desktop", "tablet", "mobile", "custom:ultrawide"]);
+    expect(state.layouts["custom:ultrawide"]).toMatchObject({ name: "UltraWide", builtIn: false });
+    expect(state.deviceDefaults["custom:ultrawide"]).toBe("main");
+    expect(state.boxes.parent.layoutRects["custom:ultrawide"]).toEqual(state.boxes.parent.layoutRects.desktop);
+    const control = Object.values(state.boxes)
+      .find((box) => box.role.type === "device" && box.role.device === "custom:ultrawide");
+    expect(control?.labelKey).toBe(state.layouts["custom:ultrawide"].labelKey);
+    expect(state.localeMessages[state.layouts["custom:ultrawide"].labelKey]).toBe("UltraWide");
+  });
+
+  it("places a new layout control in a free global grid slot", () => {
+    let state = initial();
+    state = apply(state, { type: "view.create", payload: { viewId: "one", name: "Nézet 1" } });
+    state = apply(state, { type: "view.create", payload: { viewId: "two", name: "Nézet 2" } });
+    state = apply(state, {
+      type: "layout.create",
+      payload: { layoutId: "custom:ultrawide", name: "UltraWide", sourceLayoutId: "desktop" },
+    });
+    const control = Object.values(state.boxes)
+      .find((box) => box.role.type === "device" && box.role.device === "custom:ultrawide")!;
+    expect(control.layoutRects.desktop).toEqual({ column: 12, row: 2, width: 6, height: 2 });
+  });
+
+  it("protects built-in layouts and safely deletes custom layout geometry", () => {
+    let state = withTwoBoxes();
+    expect(() => apply(state, { type: "layout.delete", payload: { layoutId: "desktop" } }))
+      .toThrowError(new DomainError("layout.delete.protected"));
+    state = apply(state, {
+      type: "layout.create",
+      payload: { layoutId: "custom:wall", name: "Fali panel", sourceLayoutId: "tablet" },
+    });
+    state = apply(state, { type: "layout.activate", payload: { layoutId: "custom:wall" } });
+    expect(() => apply(state, { type: "layout.delete", payload: { layoutId: "custom:wall" } }))
+      .toThrowError(new DomainError("layout.delete.active"));
+    state = apply(state, { type: "layout.activate", payload: { layoutId: "desktop" } });
+    state = apply(state, { type: "layout.delete", payload: { layoutId: "custom:wall" } });
+    expect(state.layouts["custom:wall"]).toBeUndefined();
+    expect(state.deviceDefaults["custom:wall"]).toBeUndefined();
+    expect(Object.values(state.boxes).every((box) => box.layoutRects["custom:wall"] === undefined)).toBe(true);
+    expect(Object.values(state.boxes).some((box) => box.role.type === "device" && box.role.device === "custom:wall"))
+      .toBe(false);
+  });
+
   it("stores handle and box-name visibility through commands", () => {
     let state = initial();
     state = apply(state, { type: "workspace.handles.set", payload: { visible: false } });
     state = apply(state, { type: "workspace.names.set", payload: { visible: false } });
     expect(state.preferences).toEqual({ handlesVisible: false, namesVisible: false });
+  });
+
+  it("marks content and protected controls as hidden outside editing mode", () => {
+    let state = withTwoBoxes();
+    const deviceControl = Object.values(state.boxes).find((box) => box.role.type === "device")!;
+    state = apply(state, {
+      type: "box.visibility.set",
+      payload: { boxId: "parent", hiddenWhenLocked: true },
+    });
+    state = apply(state, {
+      type: "box.visibility.set",
+      payload: { boxId: deviceControl.id, hiddenWhenLocked: true },
+    });
+    expect(state.boxes.parent.hiddenWhenLocked).toBe(true);
+    expect(state.boxes[deviceControl.id].hiddenWhenLocked).toBe(true);
   });
 
   it("keeps a view control box synchronized when it is renamed", () => {

@@ -1,4 +1,4 @@
-import type { DeviceKind } from "@synaius/domain";
+import type { LayoutId } from "@synaius/domain";
 import type { GridMetrics } from "./grid-interaction";
 
 export interface CanvasViewport {
@@ -14,7 +14,7 @@ export const CANVAS_VIEWPORT_STORAGE_KEY = "synaius.canvas-viewports.v1";
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4;
 
-export function canvasViewportKey(viewId: string, device: DeviceKind) {
+export function canvasViewportKey(viewId: string, device: LayoutId) {
   return `${viewId}:${device}`;
 }
 

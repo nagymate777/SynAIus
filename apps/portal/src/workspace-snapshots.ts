@@ -1,4 +1,4 @@
-import type { CloneNameTemplates, DeviceKind, DeviceNames, WorkspaceState } from "@synaius/domain";
+import type { CloneNameTemplates, DeviceNames, LayoutId, WorkspaceState } from "@synaius/domain";
 import { upgradeWorkspaceState } from "./workspace-storage";
 
 export const WORKSPACE_SNAPSHOTS_STORAGE_KEY = "synaius.workspace-snapshots.v1";
@@ -12,7 +12,7 @@ export interface WorkspaceSnapshot {
 
 export function loadWorkspaceSnapshots(
   deviceNames: DeviceNames,
-  activeLayout: DeviceKind,
+  activeLayout: LayoutId,
   cloneNameTemplates: CloneNameTemplates,
 ): WorkspaceSnapshot[] {
   try {
@@ -51,7 +51,7 @@ export function createWorkspaceSnapshot(workspace: WorkspaceState, name: string)
 export function parseWorkspaceExport(
   text: string,
   deviceNames: DeviceNames,
-  activeLayout: DeviceKind,
+  activeLayout: LayoutId,
   cloneNameTemplates: CloneNameTemplates,
 ): WorkspaceState | null {
   try {

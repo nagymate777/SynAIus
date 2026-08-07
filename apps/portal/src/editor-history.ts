@@ -55,7 +55,7 @@ export function workspaceWithRevision(workspace: WorkspaceState, revision: numbe
 
 function workspaceForHistoryRestore(target: WorkspaceState, current: WorkspaceState) {
   const restored = workspaceWithRevision(target, current.revision + 1);
-  restored.activeLayout = current.activeLayout;
+  if (restored.layouts[current.activeLayout]) restored.activeLayout = current.activeLayout;
   restored.preferences = structuredClone(current.preferences);
   if (restored.views[current.activeViewId]) restored.activeViewId = current.activeViewId;
   for (const [viewId, view] of Object.entries(restored.views)) {

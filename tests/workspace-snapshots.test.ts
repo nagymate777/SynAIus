@@ -16,16 +16,31 @@ describe("workspace snapshots", () => {
 
   it("migrates a valid legacy export and rejects malformed data", () => {
     const current = createWorkspace({ workspaceId: "workspace", initialViewId: "main", initialViewName: "Alapnézet" });
-    const { schemaVersion: _schemaVersion, localeMessages: _localeMessages, boxes, ...base } = current;
+    const {
+      schemaVersion: _schemaVersion,
+      localeMessages: _localeMessages,
+      layouts: _layouts,
+      layoutOrder: _layoutOrder,
+      boxes,
+      ...base
+    } = current;
     const legacy: LegacyWorkspaceStateV3 = {
       ...base,
       schemaVersion: 3,
+      activeLayout: "desktop",
+      deviceDefaults: { desktop: "main", tablet: "main", mobile: "main" },
       boxes: Object.fromEntries(Object.values(boxes).map((box) => {
-        const { labelKey: _labelKey, cloneSourceId: _cloneSourceId, cloneOrdinal: _cloneOrdinal, ...legacyBox } = box;
+        const {
+          labelKey: _labelKey,
+          cloneSourceId: _cloneSourceId,
+          cloneOrdinal: _cloneOrdinal,
+          hiddenWhenLocked: _hiddenWhenLocked,
+          ...legacyBox
+        } = box;
         return [box.id, { ...legacyBox, archived: false }];
       })),
     };
-    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop", cloneNameTemplates)?.schemaVersion).toBe(5);
+    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop", cloneNameTemplates)?.schemaVersion).toBe(6);
     expect(parseWorkspaceExport("not-json", deviceNames, "desktop", cloneNameTemplates)).toBeNull();
     expect(parseWorkspaceExport(JSON.stringify({ schemaVersion: 2 }), deviceNames, "desktop", cloneNameTemplates)).toBeNull();
   });

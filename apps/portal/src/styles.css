@@ -103,7 +103,7 @@ button:disabled {
   border-radius: 0.6rem;
   background: rgb(21 33 45 / 0.9);
   box-shadow: 0 0.65rem 2rem rgb(0 0 0 / 0.22);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
 }
 
 .canvas-box[data-box-role="view"],
@@ -127,6 +127,12 @@ button:disabled {
   z-index: 20;
   border-color: #f0c86a;
   box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.45);
+}
+
+.portal-shell[data-handles-visible="true"] .canvas-box[data-hidden-when-locked="true"] {
+  border-color: #aab2bf;
+  border-style: dashed;
+  opacity: 0.58;
 }
 
 .portal-shell[data-handles-visible="true"] .canvas-box {
@@ -157,6 +163,21 @@ button:disabled {
 
 .portal-shell[data-names-visible="false"] .box-name {
   display: none;
+}
+
+.box-visibility-state {
+  position: absolute;
+  z-index: 4;
+  left: 0.45rem;
+  bottom: 0.3rem;
+  max-width: calc(100% - 0.9rem);
+  overflow: hidden;
+  color: #d2d8e1;
+  font-size: 0.68rem;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .box-children {
@@ -275,6 +296,7 @@ button:disabled {
 }
 
 .context-menu input,
+.context-menu select,
 .context-menu textarea {
   width: 100%;
   border: 1px solid #3a485b;

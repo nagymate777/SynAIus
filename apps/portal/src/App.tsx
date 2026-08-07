@@ -12,11 +12,12 @@ import {
   createWorkspace,
   isProtectedBox,
   type BoxNode,
+  type BuiltInDeviceKind,
   type CloneNameTemplates,
   type CommandPayload,
-  type DeviceKind,
   type DeviceNames,
   type GridRect,
+  type LayoutId,
   type WorkspaceCommand,
   type WorkspaceState,
 } from "@synaius/domain";
@@ -73,7 +74,7 @@ const cloneNameTemplates: CloneNameTemplates = {
 };
 
 type DragMode = "move" | "resize-start" | "resize-end";
-type ContextMode = "actions" | "rename" | "label" | "delete" | "copy-layout" | "snapshots" | "import";
+type ContextMode = "actions" | "rename" | "label" | "delete" | "add-layout" | "delete-layout" | "copy-layout" | "snapshots" | "import";
 type ClipboardMode = "cut" | "clone";
 
 interface DragState {
@@ -109,6 +110,7 @@ interface ContextState {
   mode: ContextMode;
   draftName: string;
   draftLabel: string;
+  sourceLayoutId: LayoutId;
   errorKey: string | null;
 }
 
@@ -262,7 +264,7 @@ export function App() {
     setContext(null);
   }
 
-  function copyLayout(target: DeviceKind) {
+  function copyLayout(target: LayoutId) {
     send("layout.copy", {
       source: workspace.activeLayout,
       target,
@@ -355,8 +357,10 @@ export function App() {
   }
 
   const visibleBoxes = useMemo(
-    () => Object.values(workspace.boxes).filter((box) => box.viewId === null || box.viewId === activeView.id),
-    [activeView.id, workspace.boxes],
+    () => Object.values(workspace.boxes).filter((box) =>
+      (box.viewId === null || box.viewId === activeView.id)
+      && (workspace.preferences.handlesVisible || !boxIsHiddenWhenLocked(workspace, box))),
+    [activeView.id, workspace.boxes, workspace.preferences.handlesVisible],
   );
   const visibleBoxIds = useMemo(() => new Set(visibleBoxes.map((box) => box.id)), [visibleBoxes]);
   const visibleRootBoxes = useMemo(
@@ -384,6 +388,22 @@ export function App() {
         type: "view.activate",
         payload: { viewId },
       }).state;
+    });
+    setContext(null);
+  }
+
+  function addLayout(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!context) return;
+    const name = context.draftName.trim();
+    if (!name || !workspace.layouts[context.sourceLayoutId]) return;
+    const duplicate = Object.values(workspace.boxes).some((box) =>
+      box.name.localeCompare(name, "hu", { sensitivity: "base" }) === 0);
+    if (duplicate) return;
+    send("layout.create", {
+      layoutId: `custom:${crypto.randomUUID()}`,
+      name,
+      sourceLayoutId: context.sourceLayoutId,
     });
     setContext(null);
   }
@@ -430,6 +450,7 @@ export function App() {
       mode: "actions",
       draftName: "",
       draftLabel: "",
+      sourceLayoutId: workspace.activeLayout,
       errorKey: null,
     });
   }
@@ -450,6 +471,7 @@ export function App() {
       mode: "actions",
       draftName: box.name,
       draftLabel: localizedBoxLabel(workspace, box),
+      sourceLayoutId: workspace.activeLayout,
       errorKey: null,
     });
   }
@@ -683,7 +705,7 @@ export function App() {
 
   function activateSystemBox(box: BoxNode) {
     if (box.role.type === "view") send("view.activate", { viewId: box.role.viewId });
-    if (box.role.type === "device") send("layout.activate", { device: box.role.device });
+    if (box.role.type === "device") send("layout.activate", { layoutId: box.role.device });
   }
 
   function systemBoxSelected(box: BoxNode) {
@@ -715,6 +737,7 @@ export function App() {
         data-box-role={box.role.type}
         data-dragging={drag?.boxId === box.id}
         data-clipboard-mode={clipboard?.boxId === box.id ? clipboard.mode : undefined}
+        data-hidden-when-locked={box.hiddenWhenLocked}
         key={box.id}
         onContextMenu={(event) => openBoxContext(event, box)}
         onPointerDown={(event) => beginBoxMove(event, box)}
@@ -729,6 +752,9 @@ export function App() {
           onPointerDown={(event) => beginDrag(event, box, "resize-start")}
         />
         <strong className="box-name">{box.name}</strong>
+        {workspace.preferences.handlesVisible && box.hiddenWhenLocked && (
+          <span className="box-visibility-state">{t("box.hiddenWhenLocked")}</span>
+        )}
         {box.role.type !== "content" && (
           <button
             className="system-box-action"
@@ -834,6 +860,20 @@ export function App() {
                     <button role="menuitem" onClick={addView}>{t("action.addView")}</button>
                     <button
                       role="menuitem"
+                      onClick={() => setContext({
+                        ...context,
+                        mode: "add-layout",
+                        draftName: nextAvailableName(
+                          "layout.generatedName",
+                          Object.values(workspace.layouts).map((layout) => layout.name),
+                        ),
+                        sourceLayoutId: workspace.activeLayout,
+                      })}
+                    >
+                      {t("action.addLayout")}
+                    </button>
+                    <button
+                      role="menuitem"
                       onClick={() => {
                         send("grid.visibility.set", { viewId: activeView.id, visible: !activeView.grid.visible });
                         setContext(null);
@@ -891,14 +931,14 @@ export function App() {
                         aria-pressed={workspace.deviceDefaults[workspace.activeLayout] === contextBox.role.viewId}
                         onClick={() => {
                           if (contextBox.role.type !== "view") return;
-                          send("view.setDeviceDefault", {
-                            device: workspace.activeLayout,
+                          send("view.setLayoutDefault", {
+                            layoutId: workspace.activeLayout,
                             viewId: contextBox.role.viewId,
                           });
                           setContext(null);
                         }}
                       >
-                        {t("action.setDefaultView", { layout: deviceNames[workspace.activeLayout] })}
+                        {t("action.setDefaultView", { layout: localizedLayoutLabel(workspace, workspace.activeLayout) })}
                       </button>
                     )}
                     {!contextBox.cloneSourceId && (
@@ -911,6 +951,19 @@ export function App() {
                         {t("action.editBoxLabel")}
                       </button>
                     )}
+                    <button
+                      role="menuitem"
+                      aria-pressed={contextBox.hiddenWhenLocked}
+                      onClick={() => {
+                        send("box.visibility.set", {
+                          boxId: contextBox.id,
+                          hiddenWhenLocked: !contextBox.hiddenWhenLocked,
+                        });
+                        setContext(null);
+                      }}
+                    >
+                      {t(contextBox.hiddenWhenLocked ? "action.showWhenLocked" : "action.hideWhenLocked")}
+                    </button>
                     {contextBox.role.type === "content" && (
                       <>
                       <button
@@ -935,6 +988,18 @@ export function App() {
                         onClick={() => setContext({ ...context, mode: "delete" })}
                       >
                         {t("action.deleteBox")}
+                      </button>
+                    )}
+                    {contextBox.role.type === "device" && !workspace.layouts[contextBox.role.device]?.builtIn && (
+                      <button
+                        role="menuitem"
+                        disabled={workspace.activeLayout === contextBox.role.device}
+                        title={workspace.activeLayout === contextBox.role.device
+                          ? t("layout.delete.active")
+                          : undefined}
+                        onClick={() => setContext({ ...context, mode: "delete-layout" })}
+                      >
+                        {t("action.deleteLayout")}
                       </button>
                     )}
                   </>
@@ -975,17 +1040,44 @@ export function App() {
               </form>
             )}
 
+            {context.mode === "add-layout" && (
+              <form onSubmit={addLayout}>
+                <p>{t("layout.create.title")}</p>
+                <label htmlFor="layout-name">{t("layout.create.name")}</label>
+                <input
+                  id="layout-name"
+                  autoFocus
+                  value={context.draftName}
+                  onChange={(event) => setContext({ ...context, draftName: event.target.value })}
+                />
+                <label htmlFor="layout-source">{t("layout.create.source")}</label>
+                <select
+                  id="layout-source"
+                  value={context.sourceLayoutId}
+                  onChange={(event) => setContext({ ...context, sourceLayoutId: event.target.value })}
+                >
+                  {workspace.layoutOrder.map((layoutId) => (
+                    <option key={layoutId} value={layoutId}>{localizedLayoutLabel(workspace, layoutId)}</option>
+                  ))}
+                </select>
+                <div className="context-actions">
+                  <button type="submit">{t("action.createLayout")}</button>
+                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                </div>
+              </form>
+            )}
+
             {context.mode === "copy-layout" && (
               <div>
                 <p>{t(contextBox ? "layout.copyBoxPrompt" : "layout.copyViewPrompt", {
-                  layout: deviceNames[workspace.activeLayout],
+                  layout: localizedLayoutLabel(workspace, workspace.activeLayout),
                 })}</p>
                 <div className="context-stack">
-                  {(["desktop", "tablet", "mobile"] as const)
-                    .filter((device) => device !== workspace.activeLayout)
-                    .map((device) => (
-                      <button key={device} onClick={() => copyLayout(device)}>
-                        {t("layout.copyTo", { layout: deviceNames[device] })}
+                  {workspace.layoutOrder
+                    .filter((layoutId) => layoutId !== workspace.activeLayout)
+                    .map((layoutId) => (
+                      <button key={layoutId} onClick={() => copyLayout(layoutId)}>
+                        {t("layout.copyTo", { layout: localizedLayoutLabel(workspace, layoutId) })}
                       </button>
                     ))}
                   <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
@@ -1053,6 +1145,29 @@ export function App() {
                 </div>
               </div>
             )}
+
+            {context.mode === "delete-layout"
+              && contextBox?.role.type === "device"
+              && !workspace.layouts[contextBox.role.device]?.builtIn && (
+              <div>
+                <p>{t("layout.delete.confirm", {
+                  name: localizedLayoutLabel(workspace, contextBox.role.device),
+                })}</p>
+                <div className="context-actions">
+                  <button
+                    className="danger"
+                    onClick={() => {
+                      if (contextBox.role.type !== "device") return;
+                      send("layout.delete", { layoutId: contextBox.role.device });
+                      setContext(null);
+                    }}
+                  >
+                    {t("action.deleteLayout")}
+                  </button>
+                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                </div>
+              </div>
+            )}
           </aside>
         </>
       )}
@@ -1071,15 +1186,18 @@ function createInitialWorkspace() {
     initialLayout: detectedLayout,
   });
   let workspace = loadWorkspace(fallback, deviceNames, detectedLayout, cloneNameTemplates);
-  if (workspace.activeLayout !== detectedLayout) {
+  const selectedLayout = workspace.layouts[workspace.activeLayout]?.builtIn
+    ? detectedLayout
+    : workspace.activeLayout;
+  if (workspace.activeLayout !== selectedLayout) {
     workspace = applyWorkspaceCommand(workspace, {
       id: crypto.randomUUID(),
       expectedRevision: workspace.revision,
       type: "layout.activate",
-      payload: { device: detectedLayout },
+      payload: { layoutId: selectedLayout },
     }).state;
   }
-  const defaultViewId = workspace.deviceDefaults[detectedLayout];
+  const defaultViewId = workspace.deviceDefaults[selectedLayout];
   if (!defaultViewId || !workspace.views[defaultViewId] || defaultViewId === workspace.activeViewId) return workspace;
   return applyWorkspaceCommand(workspace, {
     id: crypto.randomUUID(),
@@ -1089,7 +1207,7 @@ function createInitialWorkspace() {
   }).state;
 }
 
-function deviceKindForWidth(width: number): DeviceKind {
+function deviceKindForWidth(width: number): BuiltInDeviceKind {
   if (width <= 640) return "mobile";
   if (width <= 1024) return "tablet";
   return "desktop";
@@ -1127,6 +1245,20 @@ function descendantIds(workspace: WorkspaceState, boxId: string): string[] {
 
 function localizedBoxLabel(workspace: WorkspaceState, box: BoxNode) {
   return box.labelKey ? workspace.localeMessages[box.labelKey] ?? "" : "";
+}
+
+function localizedLayoutLabel(workspace: WorkspaceState, layoutId: LayoutId) {
+  const layout = workspace.layouts[layoutId];
+  return layout ? workspace.localeMessages[layout.labelKey] ?? layout.name : layoutId;
+}
+
+function boxIsHiddenWhenLocked(workspace: WorkspaceState, box: BoxNode) {
+  let current: BoxNode | undefined = box;
+  while (current) {
+    if (current.hiddenWhenLocked) return true;
+    current = current.parentId ? workspace.boxes[current.parentId] : undefined;
+  }
+  return false;
 }
 
 function sameRect(left: GridRect, right: GridRect) {
