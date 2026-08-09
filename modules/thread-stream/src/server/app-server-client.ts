@@ -344,6 +344,7 @@ function projectThreadForViewer(thread: Record<string, unknown>, threadId: strin
   return {
     id: stringValue(thread.id) ?? threadId,
     name: stringValue(thread.name),
+    cwd: stringValue(thread.cwd),
     status: structuredClone(thread.status ?? null),
     turns: turns.map((turn) => ({
       id: stringValue(turn.id),

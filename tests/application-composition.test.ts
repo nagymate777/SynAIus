@@ -8,5 +8,9 @@ describe("application composition", () => {
     expect(studioApplication.localeMessages).toEqual(operaiApplication.localeMessages);
     expect(studioApplication.localeMessages[studioApplication.titleKey]).toBe("SynAIus Studio");
     expect(operaiApplication.localeMessages[operaiApplication.titleKey]).toBe("SynAIus OperAI");
+    expect(operaiApplication.modules.map((module) => module.id)).toEqual([
+      "artifact-viewer",
+      "thread-stream",
+    ]);
   });
 });

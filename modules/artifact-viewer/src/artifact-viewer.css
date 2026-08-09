@@ -1,0 +1,129 @@
+.artifact-viewer {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 0.4rem;
+  padding: 0.55rem;
+  color: #e8f2f0;
+  background: rgb(5 15 19 / 88%);
+}
+
+.artifact-viewer-header {
+  min-width: 0;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.artifact-viewer-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.artifact-viewer-header strong,
+.artifact-viewer-header code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-viewer-header strong {
+  color: #c4e3de;
+  font-size: 0.82rem;
+}
+
+.artifact-viewer-header code {
+  color: #8ba8a6;
+  font-size: 0.66rem;
+}
+
+.artifact-viewer-header button {
+  flex: 0 0 auto;
+  padding: 0.34rem 0.5rem;
+}
+
+.artifact-viewer-meta {
+  display: flex;
+  gap: 0.5rem;
+  color: #83aaa6;
+  font-size: 0.66rem;
+}
+
+.artifact-viewer-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #29454b;
+  border-radius: 0.45rem;
+  background: #061319;
+}
+
+.artifact-viewer-body > p[role="alert"] {
+  color: #ffaaaa;
+}
+
+.artifact-viewer-body > p {
+  margin: 1rem;
+  color: #93aaa8;
+  text-align: center;
+}
+
+.artifact-viewer-body > pre,
+.artifact-viewer-markdown pre {
+  box-sizing: border-box;
+  min-width: 100%;
+  margin: 0;
+  padding: 0.7rem;
+  color: #d8e7e5;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.artifact-viewer-body > img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  object-fit: contain;
+}
+
+.artifact-viewer-markdown {
+  padding: 0.8rem;
+  color: #d8e7e5;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.artifact-viewer-markdown h1,
+.artifact-viewer-markdown h2,
+.artifact-viewer-markdown h3 {
+  margin: 0.8em 0 0.35em;
+  color: #bce2db;
+}
+
+.artifact-viewer-markdown h1:first-child,
+.artifact-viewer-markdown h2:first-child,
+.artifact-viewer-markdown h3:first-child {
+  margin-top: 0;
+}
+
+.artifact-viewer-markdown p,
+.artifact-viewer-markdown ul {
+  margin: 0.45rem 0;
+}
+
+.artifact-viewer-markdown pre {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid #29454b;
+  border-radius: 0.35rem;
+  background: #030d11;
+}

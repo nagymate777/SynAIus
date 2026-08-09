@@ -221,6 +221,14 @@ export type WorkspaceCommand =
   | CommandEnvelope<"workspace.names.set", { visible: boolean }>
   | CommandEnvelope<"localization.message.set", { key: string; value: string }>
   | CommandEnvelope<"content.create", { content: Omit<ContentInstance, "revision"> }>
+  | CommandEnvelope<"content.box.create", {
+      content: Omit<ContentInstance, "revision">;
+      boxId: string;
+      viewId: string;
+      parentId: string | null;
+      name: string;
+      rect: GridRect;
+    }>
   | CommandEnvelope<"content.configure", { contentId: string; configuration: JsonObject }>
   | CommandEnvelope<"content.delete", { contentId: string }>
   | CommandEnvelope<"box.content.attach", { boxId: string; contentId: string | null }>
@@ -718,6 +726,37 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       state.contents[content.id] = { ...content, revision: 0 };
       break;
     }
+    case "content.box.create": {
+      const content = structuredClone(command.payload.content);
+      requiredId(content.id);
+      requiredId(content.type);
+      if (state.contents[content.id]) throw new DomainError("content.id.duplicate");
+      assertContentInstance({ ...content, revision: 0 });
+      requiredId(command.payload.boxId);
+      if (state.boxes[command.payload.boxId]) throw new DomainError("box.id.duplicate");
+      const view = requireView(state, command.payload.viewId);
+      assertUniqueBoxName(state, command.payload.name);
+      const parent = command.payload.parentId ? requireBox(state, command.payload.parentId) : null;
+      if (parent && parent.viewId !== view.id) throw new DomainError("box.parent.viewMismatch");
+      assertRect(command.payload.rect, parent ? parent.childGrid.columns : null);
+      state.contents[content.id] = { ...content, revision: 0 };
+      state.boxes[command.payload.boxId] = {
+        id: command.payload.boxId,
+        viewId: view.id,
+        parentId: parent?.id ?? null,
+        name: normalizedName(command.payload.name),
+        labelKey: null,
+        layoutRects: layoutRectsFrom(command.payload.rect, state.layoutOrder),
+        childGrid: { columns: 24, visible: false },
+        style: { declarations: {}, scopedCss: "" },
+        role: { type: "content" },
+        contentId: content.id,
+        cloneSourceId: null,
+        cloneOrdinal: null,
+        hiddenWhenLocked: false,
+      };
+      break;
+    }
     case "content.configure": {
       const content = requireContent(state, command.payload.contentId);
       assertJsonObject(command.payload.configuration);
@@ -853,6 +892,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       if (Object.values(state.boxes).some((candidate) => candidate.parentId === box.id)) {
         throw new DomainError("workspace.box.delete.hasChildren");
       }
+      const detachedContentId = box.contentId;
       Object.values(state.boxes)
         .filter((candidate) => candidate.cloneSourceId === box.id)
         .forEach((candidate) => {
@@ -860,6 +900,12 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
           candidate.cloneOrdinal = null;
         });
       delete state.boxes[box.id];
+      if (
+        detachedContentId
+        && !Object.values(state.boxes).some((candidate) => candidate.contentId === detachedContentId)
+      ) {
+        delete state.contents[detachedContentId];
+      }
       break;
     }
     case "box.style.patch": {

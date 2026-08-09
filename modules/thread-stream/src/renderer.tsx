@@ -67,6 +67,10 @@ const THREAD_STREAM_FILTER_KEYS: Record<ThreadStreamFilter, string> = {
 export interface ThreadStreamRendererOptions {
   gateway: ThreadStreamGateway;
   localeMessages: TranslationDictionary;
+  onOpenFile?: (
+    input: { threadId: string; path: string },
+    context: WorkspaceContentRenderContext,
+  ) => void;
 }
 
 export function createThreadStreamRenderer(
@@ -84,6 +88,7 @@ export function createThreadStreamRenderer(
         content={instance}
         context={context}
         gateway={options.gateway}
+        onOpenFile={options.onOpenFile}
         t={t}
       />
     ),
@@ -94,11 +99,13 @@ function ThreadStreamPanel({
   content,
   context,
   gateway,
+  onOpenFile,
   t,
 }: {
   content: ContentInstance;
   context: WorkspaceContentRenderContext;
   gateway: ThreadStreamGateway;
+  onOpenFile?: ThreadStreamRendererOptions["onOpenFile"];
   t: ReturnType<typeof createTranslator>;
 }) {
   const configuredThreadId = threadIdFrom(content.configuration);
@@ -306,6 +313,11 @@ function ThreadStreamPanel({
     setUnreadKeys(new Set());
     const log = logRef.current;
     if (log) log.scrollTo({ top: log.scrollHeight, behavior: "smooth" });
+  }
+
+  function openFile(path: string) {
+    if (!configuredThreadId) return;
+    onOpenFile?.({ threadId: configuredThreadId, path }, context);
   }
 
   function selectThread(threadId: string) {
@@ -603,6 +615,7 @@ function ThreadStreamPanel({
               isLatest={turnIndex === turns.length - 1}
               key={turn.id}
               number={turnIndex + 1}
+              onOpenFile={onOpenFile ? openFile : undefined}
               t={t}
               turn={turn}
               visibleLines={visibleLines}
@@ -638,6 +651,7 @@ function ThreadTurnCard({
   number,
   isLatest,
   hasUnread,
+  onOpenFile,
   t,
 }: {
   turn: ThreadTurnGroup;
@@ -645,6 +659,7 @@ function ThreadTurnCard({
   number: number;
   isLatest: boolean;
   hasUnread: boolean;
+  onOpenFile?: (path: string) => void;
   t: ReturnType<typeof createTranslator>;
 }) {
   const [open, setOpen] = useState(turn.status === "inProgress" || isLatest);
@@ -696,7 +711,9 @@ function ThreadTurnCard({
           {visibleLines.length === 0 && (
             <p className="thread-stream-empty">{t("module.thread-stream.turn.filtered.empty")}</p>
           )}
-          {visibleLines.map((line) => <ThreadStreamEntry key={line.id} line={line} t={t} />)}
+          {visibleLines.map((line) => (
+            <ThreadStreamEntry key={line.id} line={line} onOpenFile={onOpenFile} t={t} />
+          ))}
         </div>
       )}
     </details>
@@ -705,13 +722,15 @@ function ThreadTurnCard({
 
 function ThreadStreamEntry({
   line,
+  onOpenFile,
   t,
 }: {
   line: ThreadStreamLine;
+  onOpenFile?: (path: string) => void;
   t: ReturnType<typeof createTranslator>;
 }) {
   return line.kind === "activity"
-    ? <ThreadActivityCard activity={line.activity} t={t} />
+    ? <ThreadActivityCard activity={line.activity} onOpenFile={onOpenFile} t={t} />
     : (
         <article className="thread-stream-line" data-kind={line.kind}>
           {line.text}
@@ -721,9 +740,11 @@ function ThreadStreamEntry({
 
 function ThreadActivityCard({
   activity,
+  onOpenFile,
   t,
 }: {
   activity: ThreadActivity;
+  onOpenFile?: (path: string) => void;
   t: ReturnType<typeof createTranslator>;
 }) {
   const [open, setOpen] = useState(activity.status === "inProgress" || activity.status === "failed");
@@ -788,6 +809,15 @@ function ThreadActivityCard({
                 {change.diff
                   ? <pre>{change.diff}</pre>
                   : <p>{t("module.thread-stream.activity.diff.empty")}</p>}
+                {onOpenFile && change.kind !== "delete" && (
+                  <button
+                    className="thread-stream-file-open"
+                    onClick={() => onOpenFile(change.path)}
+                    type="button"
+                  >
+                    {t("module.thread-stream.activity.file.open")}
+                  </button>
+                )}
               </details>
             ))}
             {!activity.changes.length && (

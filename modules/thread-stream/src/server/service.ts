@@ -13,6 +13,7 @@ import type {
   ThreadListQuery,
   ThreadSnapshot,
 } from "@synaius/protocol";
+import { artifactRootForThread, readArtifactFile } from "./artifact.ts";
 import { AppServerClient, reconnectDelayMs, toThreadSnapshot } from "./app-server-client.ts";
 import { ThreadEventStore } from "./store.ts";
 
@@ -227,6 +228,21 @@ export class ThreadStreamService {
       if (cached) return cached;
       throw error;
     }
+  }
+
+  async readThreadFileArtifact(threadId: string, path: string) {
+    const cached = this.store.readSnapshot(threadId);
+    if (cached) {
+      try {
+        return await readArtifactFile(threadId, artifactRootForThread(cached.raw, path), path);
+      } catch (error) {
+        if (!(error instanceof Error)
+          || (error.message !== "artifact.path.denied"
+            && error.message !== "artifact.root.unavailable")) throw error;
+      }
+    }
+    const refreshed = await this.readThread(threadId);
+    return readArtifactFile(threadId, artifactRootForThread(refreshed.raw, path), path);
   }
 
   async resumeThread(threadId: string): Promise<ThreadSnapshot> {

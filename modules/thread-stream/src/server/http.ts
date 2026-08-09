@@ -104,6 +104,20 @@ async function route(
     }
   }
 
+  const artifactPath = url.pathname.match(
+    /^\/api\/thread-stream\/threads\/([^/]+)\/artifacts\/file$/,
+  );
+  if (request.method === "GET" && artifactPath) {
+    return writeJson(
+      response,
+      200,
+      await service.readThreadFileArtifact(
+        decodeURIComponent(artifactPath[1]),
+        requiredString(url.searchParams.get("path"), "artifact.path.invalid"),
+      ),
+    );
+  }
+
   const actionPath = url.pathname.match(
     /^\/api\/thread-stream\/threads\/([^/]+)\/(attach|detach|resume|turns|steer|interrupt)$/,
   );

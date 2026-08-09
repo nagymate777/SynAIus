@@ -18,3 +18,4 @@
 16. The canvas camera is machine-local view state. Pan and zoom never rewrite box grid geometry, while placement still snaps through the shared grid core.
 17. The desktop, tablet and mobile layout profiles are protected compatibility anchors. User-created profiles can be copied and deleted without deleting shared box identity or content.
 18. A box hidden outside editing remains persisted and editable while structural editing is unlocked. Hiding a parent hides its descendants when editing is locked.
+19. Artifact content is provider-referenced and read-only by default. Local files are resolved and authorized by the bridge inside an explicit workspace root; browsers never receive general filesystem access.

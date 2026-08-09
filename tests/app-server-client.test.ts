@@ -59,6 +59,7 @@ describe("Codex app-server client", () => {
     const snapshot = toThreadSnapshot({
       id: "thread-1",
       name: "Feladat",
+      cwd: "C:/project",
       status: { type: "active" },
       turns: [
         {
@@ -115,6 +116,7 @@ describe("Codex app-server client", () => {
     expect(JSON.stringify(snapshot.raw)).not.toContain("not-for-viewer");
     expect(JSON.stringify(snapshot.raw)).toContain("Készül");
     expect(snapshot.raw).toMatchObject({
+      cwd: "C:/project",
       turns: [{
         status: "failed",
         error: { message: "Ellenőrzött hiba" },

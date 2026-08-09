@@ -387,5 +387,39 @@ describe("workspace command core", () => {
       type: "content.delete",
       payload: { contentId: "content:panel" },
     })).toThrowError(new DomainError("content.delete.inUse"));
+
+    state = apply(state, { type: "box.delete", payload: { boxId: "child" } });
+    expect(state.contents["content:panel"]).toBeDefined();
+
+    state = apply(state, { type: "box.delete", payload: { boxId: "child-clone" } });
+    expect(state.contents["content:panel"]).toBeUndefined();
+  });
+
+  it("creates and attaches a content box atomically", () => {
+    const state = apply(initial(), {
+      type: "content.box.create",
+      payload: {
+        content: {
+          id: "content:artifact",
+          type: "module.artifact-viewer.file",
+          rendererVersion: 1,
+          configuration: { provider: "thread-file", threadId: "thread-1", path: "src/app.ts" },
+          requiredPermissions: ["artifact.thread-file.read"],
+          sourceNodeId: null,
+        },
+        boxId: "box:artifact",
+        viewId: "main",
+        parentId: null,
+        name: "app.ts",
+        rect: { column: 6, row: 4, width: 12, height: 10 },
+      },
+    });
+
+    expect(state.contents["content:artifact"]).toMatchObject({ revision: 0 });
+    expect(state.boxes["box:artifact"]).toMatchObject({
+      contentId: "content:artifact",
+      role: { type: "content" },
+      name: "app.ts",
+    });
   });
 });

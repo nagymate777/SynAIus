@@ -580,6 +580,12 @@
   margin: 0 0.4rem 0.4rem;
 }
 
+.thread-stream-file-open {
+  display: block;
+  margin: 0 0.4rem 0.4rem auto;
+  padding: 0.3rem 0.45rem;
+}
+
 .thread-stream-line {
   min-width: 0;
   max-width: 90%;

@@ -1,4 +1,5 @@
 import { defineSynAIusApplication } from "@synaius/application";
+import { artifactViewerModuleManifest } from "@synaius/module-artifact-viewer";
 import { threadStreamModuleManifest } from "@synaius/module-thread-stream";
 import hu from "../../../locales/hu.json";
 
@@ -15,6 +16,6 @@ export const operaiApplication = defineSynAIusApplication({
     viewId: "operai-view-main",
     viewTitleKey: "app.operai.initialView",
   },
-  modules: [threadStreamModuleManifest],
+  modules: [artifactViewerModuleManifest, threadStreamModuleManifest],
   localeMessages: hu,
 });
