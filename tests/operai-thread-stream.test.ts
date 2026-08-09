@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createWorkspace } from "@synaius/domain";
-import { projectThreadEvent, projectThreadSnapshot } from "@synaius/module-thread-stream/renderer";
-import type { DurableThreadEvent, ThreadSnapshot } from "@synaius/protocol";
+import {
+  projectThreadEvent,
+  projectThreadInteractions,
+  projectThreadSnapshot,
+} from "@synaius/module-thread-stream/renderer";
+import type { DurableThreadEvent, PendingThreadInteraction, ThreadSnapshot } from "@synaius/protocol";
 import {
   initializeOperaiWorkspace,
   OPERAI_THREAD_STREAM_BOX_ID,
@@ -51,6 +55,27 @@ describe("OperAI thread-stream composition", () => {
       { id: "user-1", kind: "user", text: "Kezdjük" },
       { id: "agent-1", kind: "agent", text: "Rendben, mehet." },
     ]);
+  });
+
+  it("adds and resolves scoped workbox interactions from durable events", () => {
+    const interaction: PendingThreadInteraction = {
+      requestId: 42,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      createdAt: "2026-08-09T10:00:00.000Z",
+      kind: "commandApproval",
+      reason: null,
+      command: "tool --check",
+      cwd: "C:/project",
+      networkHost: null,
+      networkProtocol: null,
+    };
+    const requested = event("4", "gateway/interactionRequested", { interaction });
+    const pending = projectThreadInteractions([], requested);
+    expect(pending).toEqual([interaction]);
+    const resolved = event("5", "serverRequest/resolved", { requestId: 42 });
+    expect(projectThreadInteractions(pending, resolved)).toEqual([]);
   });
 });
 

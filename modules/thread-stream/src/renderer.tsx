@@ -4,6 +4,9 @@ import { createTranslator, type TranslationDictionary } from "@synaius/i18n";
 import type {
   CodexModelSummary,
   DurableThreadEvent,
+  PendingThreadInteraction,
+  ServerRequestId,
+  ThreadInteractionResponse,
   ThreadRuntimeStatus,
   ThreadSnapshot,
   ThreadStreamGateway,
@@ -75,6 +78,8 @@ function ThreadStreamPanel({
   const [selectedEffort, setSelectedEffort] = useState("");
   const [workingDirectory, setWorkingDirectory] = useState("");
   const [initialMessage, setInitialMessage] = useState("");
+  const [interactions, setInteractions] = useState<PendingThreadInteraction[]>([]);
+  const [respondingRequestId, setRespondingRequestId] = useState<ServerRequestId | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +143,7 @@ function ThreadStreamPanel({
     let detach: (() => Promise<void>) | null = null;
     setSnapshot(null);
     setLines([]);
+    setInteractions([]);
     if (!configuredThreadId) {
       setConnectionKey("module.thread-stream.connection.notSelected");
       return () => undefined;
@@ -152,11 +158,14 @@ function ThreadStreamPanel({
       detach = attachment.detach;
       setSnapshot(attachment.snapshot);
       setLines(projectThreadSnapshot(attachment.snapshot));
+      setInteractions(await gateway.listInteractions(configuredThreadId));
+      if (cancelled) return;
       setConnectionKey(attachment.snapshot.accessMode === "observe"
         ? "module.thread-stream.connection.observe"
         : "module.thread-stream.connection.live");
       for await (const event of attachment.events) {
         if (cancelled) break;
+        setInteractions((current) => projectThreadInteractions(current, event));
         if (event.method === "gateway/snapshotChanged") {
           const refreshed = await gateway.readThread(configuredThreadId);
           if (cancelled) break;
@@ -300,6 +309,26 @@ function ThreadStreamPanel({
     });
   }
 
+  async function respondToInteraction(
+    interaction: PendingThreadInteraction,
+    response: ThreadInteractionResponse,
+  ) {
+    if (!configuredThreadId || respondingRequestId !== null) return;
+    setRespondingRequestId(interaction.requestId);
+    setErrorKey(null);
+    try {
+      await gateway.respondToInteraction(configuredThreadId, interaction.requestId, response);
+      setInteractions((current) => current.filter(
+        (candidate) => !sameRequestId(candidate.requestId, interaction.requestId),
+      ));
+    } catch (error) {
+      console.error("thread-stream.interaction.failed", error);
+      setErrorKey("module.thread-stream.error.interaction");
+    } finally {
+      setRespondingRequestId(null);
+    }
+  }
+
   return (
     <section
       className="thread-stream-panel"
@@ -401,10 +430,23 @@ function ThreadStreamPanel({
         </form>
       ) : (
         <div className="thread-stream-log" aria-live="polite">
+          {interactions.length > 0 && (
+            <div className="thread-stream-interactions">
+              {interactions.map((interaction) => (
+                <ThreadInteractionCard
+                  busy={respondingRequestId !== null}
+                  interaction={interaction}
+                  key={requestKey(interaction.requestId)}
+                  onRespond={(response) => void respondToInteraction(interaction, response)}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
           {!configuredThreadId && (
             <p className="thread-stream-empty">{t("module.thread-stream.thread.choose")}</p>
           )}
-          {configuredThreadId && lines.length === 0 && !errorKey && (
+          {configuredThreadId && lines.length === 0 && interactions.length === 0 && !errorKey && (
             <p className="thread-stream-empty">{t("module.thread-stream.thread.waiting")}</p>
           )}
           {lines.map((line) => (
@@ -434,6 +476,270 @@ function ThreadStreamPanel({
       </form>
     </section>
   );
+}
+
+function ThreadInteractionCard({
+  interaction,
+  busy,
+  onRespond,
+  t,
+}: {
+  interaction: PendingThreadInteraction;
+  busy: boolean;
+  onRespond(response: ThreadInteractionResponse): void;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  if (interaction.kind === "userInput") {
+    return (
+      <UserInputInteraction
+        busy={busy}
+        interaction={interaction}
+        onRespond={onRespond}
+        t={t}
+      />
+    );
+  }
+  const titleKey = interaction.kind === "commandApproval"
+    ? interaction.networkHost
+      ? "module.thread-stream.interaction.network.title"
+      : "module.thread-stream.interaction.command.title"
+    : interaction.kind === "fileApproval"
+      ? "module.thread-stream.interaction.file.title"
+      : interaction.kind === "permissionsApproval"
+        ? "module.thread-stream.interaction.permissions.title"
+        : "module.thread-stream.interaction.mcp.title";
+  return (
+    <article className="thread-stream-interaction" data-kind={interaction.kind}>
+      <strong>{t(titleKey)}</strong>
+      {(interaction.kind === "commandApproval" || interaction.kind === "fileApproval"
+        || interaction.kind === "permissionsApproval") && interaction.reason && (
+        <InteractionDetail label={t("module.thread-stream.interaction.reason")} value={interaction.reason} />
+      )}
+      {interaction.kind === "commandApproval" && interaction.command && (
+        <InteractionDetail code label={t("module.thread-stream.interaction.command")} value={interaction.command} />
+      )}
+      {interaction.kind === "commandApproval" && interaction.cwd && (
+        <InteractionDetail code label={t("module.thread-stream.interaction.cwd")} value={interaction.cwd} />
+      )}
+      {interaction.kind === "commandApproval" && interaction.networkHost && (
+        <InteractionDetail
+          code
+          label={t("module.thread-stream.interaction.host")}
+          value={`${interaction.networkProtocol ?? ""}://${interaction.networkHost}`}
+        />
+      )}
+      {interaction.kind === "fileApproval" && interaction.grantRoot && (
+        <InteractionDetail code label={t("module.thread-stream.interaction.root")} value={interaction.grantRoot} />
+      )}
+      {interaction.kind === "permissionsApproval" && interaction.cwd && (
+        <InteractionDetail code label={t("module.thread-stream.interaction.cwd")} value={interaction.cwd} />
+      )}
+      {interaction.kind === "permissionsApproval" && (
+        <pre className="thread-stream-interaction-permissions">
+          {JSON.stringify(interaction.requestedPermissions, null, 2)}
+        </pre>
+      )}
+      {interaction.kind === "mcpElicitation" && (
+        <>
+          <InteractionDetail label={t("module.thread-stream.interaction.server")} value={interaction.serverName} />
+          <InteractionDetail label={t("module.thread-stream.interaction.message")} value={interaction.message} />
+          {interaction.url && (
+            <InteractionDetail code label={t("module.thread-stream.interaction.url")} value={interaction.url} />
+          )}
+          <p>{t("module.thread-stream.interaction.mcp.limited")}</p>
+        </>
+      )}
+      <div className="thread-stream-interaction-actions">
+        {(interaction.kind === "commandApproval" || interaction.kind === "fileApproval") && (
+          <>
+            <button disabled={busy} onClick={() => onRespond({ kind: "approval", decision: "accept" })} type="button">
+              {t("module.thread-stream.interaction.action.accept")}
+            </button>
+            <button disabled={busy} onClick={() => onRespond({ kind: "approval", decision: "acceptForSession" })} type="button">
+              {t("module.thread-stream.interaction.action.acceptSession")}
+            </button>
+            <button disabled={busy} onClick={() => onRespond({ kind: "approval", decision: "decline" })} type="button">
+              {t("module.thread-stream.interaction.action.decline")}
+            </button>
+            <button disabled={busy} onClick={() => onRespond({ kind: "approval", decision: "cancel" })} type="button">
+              {t("module.thread-stream.interaction.action.cancel")}
+            </button>
+          </>
+        )}
+        {interaction.kind === "permissionsApproval" && (
+          <>
+            <button disabled={busy} onClick={() => onRespond({ kind: "permissions", decision: "grantTurn" })} type="button">
+              {t("module.thread-stream.interaction.action.grantTurn")}
+            </button>
+            <button disabled={busy} onClick={() => onRespond({ kind: "permissions", decision: "grantSession" })} type="button">
+              {t("module.thread-stream.interaction.action.grantSession")}
+            </button>
+            <button disabled={busy} onClick={() => onRespond({ kind: "permissions", decision: "decline" })} type="button">
+              {t("module.thread-stream.interaction.action.decline")}
+            </button>
+          </>
+        )}
+        {interaction.kind === "mcpElicitation" && (
+          <>
+            <button disabled={busy} onClick={() => onRespond({ kind: "mcpElicitation", action: "decline" })} type="button">
+              {t("module.thread-stream.interaction.action.decline")}
+            </button>
+            <button disabled={busy} onClick={() => onRespond({ kind: "mcpElicitation", action: "cancel" })} type="button">
+              {t("module.thread-stream.interaction.action.cancel")}
+            </button>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function UserInputInteraction({
+  interaction,
+  busy,
+  onRespond,
+  t,
+}: {
+  interaction: Extract<PendingThreadInteraction, { kind: "userInput" }>;
+  busy: boolean;
+  onRespond(response: ThreadInteractionResponse): void;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  const [selections, setSelections] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const resolvedAnswers = Object.fromEntries(interaction.questions.map((question) => {
+    if (!question.options?.length) return [question.id, answers[question.id]?.trim() ?? ""];
+    const selection = selections[question.id] ?? "";
+    if (selection === "other") return [question.id, answers[question.id]?.trim() ?? ""];
+    const index = Number(selection.replace("option:", ""));
+    return [question.id, question.options[index]?.label ?? ""];
+  }));
+  const complete = interaction.questions.every((question) => Boolean(resolvedAnswers[question.id]));
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!complete || busy) return;
+    onRespond({
+      kind: "userInput",
+      answers: Object.fromEntries(Object.entries(resolvedAnswers).map(([id, value]) => [id, [value]])),
+    });
+  }
+
+  return (
+    <form className="thread-stream-interaction" data-kind="userInput" onSubmit={submit}>
+      <strong>{t("module.thread-stream.interaction.userInput.title")}</strong>
+      {interaction.questions.map((question) => {
+        const selection = selections[question.id] ?? "";
+        const useTextInput = !question.options?.length || selection === "other";
+        return (
+          <fieldset key={question.id}>
+            <legend>{question.header}</legend>
+            <label>
+              <span>{question.question}</span>
+              {question.options?.length ? (
+                <select
+                  disabled={busy}
+                  onChange={(event) => setSelections((current) => ({
+                    ...current,
+                    [question.id]: event.target.value,
+                  }))}
+                  value={selection}
+                >
+                  <option value="">{t("module.thread-stream.interaction.answer.choose")}</option>
+                  {question.options.map((option, index) => (
+                    <option key={`${index}:${option.label}`} value={`option:${index}`}>{option.label}</option>
+                  ))}
+                  {question.isOther && (
+                    <option value="other">{t("module.thread-stream.interaction.answer.other")}</option>
+                  )}
+                </select>
+              ) : null}
+              {useTextInput && (
+                <input
+                  autoComplete="off"
+                  disabled={busy}
+                  onChange={(event) => setAnswers((current) => ({
+                    ...current,
+                    [question.id]: event.target.value,
+                  }))}
+                  type={question.isSecret ? "password" : "text"}
+                  value={answers[question.id] ?? ""}
+                />
+              )}
+            </label>
+            {question.options?.map((option) => (
+              <small key={option.label}>{option.label}: {option.description}</small>
+            ))}
+          </fieldset>
+        );
+      })}
+      <div className="thread-stream-interaction-actions">
+        <button disabled={busy || !complete} type="submit">
+          {t("module.thread-stream.interaction.action.answer")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function InteractionDetail({ label, value, code = false }: {
+  label: string;
+  value: string;
+  code?: boolean;
+}) {
+  return (
+    <div className="thread-stream-interaction-detail">
+      <span>{label}</span>
+      {code ? <code>{value}</code> : <div>{value}</div>}
+    </div>
+  );
+}
+
+export function projectThreadInteractions(
+  current: PendingThreadInteraction[],
+  event: DurableThreadEvent,
+) {
+  const params = asRecord(event.raw.params);
+  if (event.method === "gateway/interactionRequested") {
+    const interaction = pendingInteraction(params.interaction);
+    if (!interaction) return current;
+    return [
+      ...current.filter((candidate) => !sameRequestId(candidate.requestId, interaction.requestId)),
+      interaction,
+    ];
+  }
+  if (event.method === "gateway/interactionsCleared") return [];
+  if (event.method === "gateway/interactionResponded" || event.method === "serverRequest/resolved") {
+    const requestId = serverRequestId(params.requestId);
+    if (requestId === null) return current;
+    return current.filter((interaction) => !sameRequestId(interaction.requestId, requestId));
+  }
+  if (event.method === "turn/completed" && event.turnId) {
+    return current.filter((interaction) => interaction.turnId !== event.turnId);
+  }
+  return current;
+}
+
+function pendingInteraction(value: unknown): PendingThreadInteraction | null {
+  const interaction = asRecord(value);
+  const requestId = serverRequestId(interaction.requestId);
+  const kind = interaction.kind;
+  if (requestId === null || !["commandApproval", "fileApproval", "userInput", "permissionsApproval", "mcpElicitation"].includes(String(kind))) {
+    return null;
+  }
+  return value as PendingThreadInteraction;
+}
+
+function serverRequestId(value: unknown): ServerRequestId | null {
+  return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
+function sameRequestId(left: ServerRequestId, right: ServerRequestId) {
+  return typeof left === typeof right && left === right;
+}
+
+function requestKey(requestId: ServerRequestId) {
+  return `${typeof requestId}:${String(requestId)}`;
 }
 
 function uniqueThreads(threads: ThreadSummary[]) {

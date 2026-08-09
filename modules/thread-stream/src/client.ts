@@ -2,8 +2,11 @@ import type {
   CodexModelPage,
   CreateCodexThreadInput,
   DurableThreadEvent,
+  PendingThreadInteraction,
+  ServerRequestId,
   StreamCursor,
   ThreadAttachment,
+  ThreadInteractionResponse,
   ThreadListQuery,
   ThreadPage,
   ThreadSnapshot,
@@ -51,6 +54,25 @@ export class BrowserThreadStreamGateway implements ThreadStreamGateway {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
+    });
+  }
+
+  async listInteractions(threadId: string): Promise<PendingThreadInteraction[]> {
+    const result = await this.readJson<{ interactions: PendingThreadInteraction[] }>(
+      `${this.baseUrl}/threads/${encodeURIComponent(threadId)}/interactions`,
+    );
+    return result.interactions;
+  }
+
+  async respondToInteraction(
+    threadId: string,
+    requestId: ServerRequestId,
+    response: ThreadInteractionResponse,
+  ): Promise<void> {
+    await this.readJson(`${this.baseUrl}/threads/${encodeURIComponent(threadId)}/interactions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId, response }),
     });
   }
 

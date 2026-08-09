@@ -8,6 +8,7 @@ import type {
   AppServerNotification,
   CodexModelPage,
   CreateCodexThreadInput,
+  ServerRequestId,
   ThreadPage,
   ThreadListQuery,
   ThreadRuntimeStatus,
@@ -102,6 +103,14 @@ export class AppServerClient extends EventEmitter {
   notify(method: string, params: unknown = {}) {
     if (!this.process?.stdin.writable) throw new Error("thread-stream.appServer.disconnected");
     this.process.stdin.write(`${JSON.stringify({ method, params })}\n`);
+  }
+
+  respondToServerRequest(requestId: ServerRequestId, result: unknown) {
+    this.writeServerResponse({ id: requestId, result });
+  }
+
+  respondToServerRequestError(requestId: ServerRequestId, code: number, message: string) {
+    this.writeServerResponse({ id: requestId, error: { code, message } });
   }
 
   async listThreads(query: ThreadListQuery = {}): Promise<ThreadPage> {
@@ -228,6 +237,11 @@ export class AppServerClient extends EventEmitter {
     this.info = result;
     this.emit("connected", { connectionId, info: result });
     return result;
+  }
+
+  private writeServerResponse(response: Record<string, unknown>) {
+    if (!this.process?.stdin.writable) throw new Error("thread-stream.appServer.disconnected");
+    this.process.stdin.write(`${JSON.stringify(response)}\n`);
   }
 
   private onStdout(

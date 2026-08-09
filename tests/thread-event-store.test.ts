@@ -59,6 +59,23 @@ describe("durable thread event store", () => {
       status: "active",
     });
     expect(store.attachedThreadIds()).toEqual(["thread-1"]);
+    store.saveInteraction({
+      requestId: "approval-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      createdAt: "2026-08-09T10:00:02.000Z",
+      kind: "fileApproval",
+      reason: "Teszt",
+      grantRoot: "C:/project",
+    }, "connection-1");
+    expect(store.pendingInteractions("thread-1")).toMatchObject([{
+      requestId: "approval-1",
+      kind: "fileApproval",
+    }]);
+    expect(store.readInteraction("thread-1", "approval-1")?.connectionId).toBe("connection-1");
+    expect(store.resolveInteraction("approval-1")).toBe(true);
+    expect(store.pendingInteractions("thread-1")).toEqual([]);
     store.detachThread("thread-1");
     expect(store.attachedThreadIds()).toEqual([]);
     store.close();

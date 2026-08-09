@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BrowserThreadStreamGateway, type EventSourceLike } from "@synaius/module-thread-stream/client";
-import type { DurableThreadEvent, ThreadSnapshot } from "@synaius/protocol";
+import type { DurableThreadEvent, PendingThreadInteraction, ThreadSnapshot } from "@synaius/protocol";
 
 describe("browser thread-stream gateway", () => {
   it("attaches from the durable snapshot cursor and closes its event stream", async () => {
@@ -71,6 +71,42 @@ describe("browser thread-stream gateway", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("loads pending interactions and sends a scoped response", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const interaction: PendingThreadInteraction = {
+      requestId: "approval-1",
+      threadId: "thread/1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      createdAt: "2026-08-09T10:00:00.000Z",
+      kind: "fileApproval",
+      reason: "Teszt",
+      grantRoot: "C:/project",
+    };
+    const gateway = new BrowserThreadStreamGateway({
+      baseUrl: "/bridge",
+      fetchImplementation: (async (url: string | URL | Request, init?: RequestInit) => {
+        requests.push({ url: String(url), init });
+        const body = init?.method === "POST" ? { ok: true } : { interactions: [interaction] };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    expect(await gateway.listInteractions("thread/1")).toEqual([interaction]);
+    await gateway.respondToInteraction("thread/1", "approval-1", {
+      kind: "approval",
+      decision: "decline",
+    });
+    expect(requests[0].url).toBe("/bridge/threads/thread%2F1/interactions");
+    expect(JSON.parse(String(requests[1].init?.body))).toEqual({
+      requestId: "approval-1",
+      response: { kind: "approval", decision: "decline" },
+    });
   });
 });
 

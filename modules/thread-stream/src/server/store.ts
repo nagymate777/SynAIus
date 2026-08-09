@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   AppServerNotification,
   DurableThreadEvent,
+  PendingThreadInteraction,
+  ServerRequestId,
   StreamCursor,
   ThreadRuntimeStatus,
   ThreadSnapshot,
@@ -54,6 +56,18 @@ export class ThreadEventStore {
         attached_at TEXT NOT NULL,
         last_resumed_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS pending_thread_interactions (
+        request_key TEXT PRIMARY KEY,
+        request_id_json TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT,
+        item_id TEXT,
+        connection_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_thread_interactions_thread
+        ON pending_thread_interactions(thread_id, created_at);
     `);
     const snapshotColumns = this.database.prepare("PRAGMA table_info(thread_snapshots)")
       .all() as Array<{ name: string }>;
@@ -155,6 +169,76 @@ export class ThreadEventStore {
     } : null;
   }
 
+  saveInteraction(interaction: PendingThreadInteraction, connectionId: string) {
+    this.database.prepare(`
+      INSERT INTO pending_thread_interactions
+        (request_key, request_id_json, thread_id, turn_id, item_id, connection_id, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(request_key) DO UPDATE SET
+        thread_id = excluded.thread_id,
+        turn_id = excluded.turn_id,
+        item_id = excluded.item_id,
+        connection_id = excluded.connection_id,
+        payload_json = excluded.payload_json,
+        created_at = excluded.created_at
+    `).run(
+      requestKey(interaction.requestId),
+      JSON.stringify(interaction.requestId),
+      interaction.threadId,
+      interaction.turnId,
+      interaction.itemId,
+      connectionId,
+      JSON.stringify(interaction),
+      interaction.createdAt,
+    );
+  }
+
+  pendingInteractions(threadId: string): PendingThreadInteraction[] {
+    return (this.database.prepare(`
+      SELECT * FROM pending_thread_interactions
+      WHERE thread_id = ? ORDER BY created_at ASC
+    `).all(threadId) as unknown as InteractionRow[]).map(mapInteraction);
+  }
+
+  readInteraction(threadId: string, requestId: ServerRequestId) {
+    const row = this.database.prepare(`
+      SELECT * FROM pending_thread_interactions
+      WHERE thread_id = ? AND request_key = ?
+    `).get(threadId, requestKey(requestId)) as InteractionRow | undefined;
+    return row ? { interaction: mapInteraction(row), connectionId: row.connection_id } : null;
+  }
+
+  resolveInteraction(requestId: ServerRequestId) {
+    return this.database.prepare(
+      "DELETE FROM pending_thread_interactions WHERE request_key = ?",
+    ).run(requestKey(requestId)).changes > 0;
+  }
+
+  clearInteractions(connectionId?: string) {
+    const rows = (connectionId
+      ? this.database.prepare(
+          "SELECT DISTINCT thread_id FROM pending_thread_interactions WHERE connection_id = ?",
+        ).all(connectionId)
+      : this.database.prepare(
+          "SELECT DISTINCT thread_id FROM pending_thread_interactions",
+        ).all()) as Array<{ thread_id: string }>;
+    if (connectionId) {
+      this.database.prepare(
+        "DELETE FROM pending_thread_interactions WHERE connection_id = ?",
+      ).run(connectionId);
+    } else {
+      this.database.exec("DELETE FROM pending_thread_interactions");
+    }
+    return rows.map((row) => row.thread_id);
+  }
+
+  clearTurnInteractions(threadId: string, turnId: string | null) {
+    if (!turnId) return;
+    this.database.prepare(`
+      DELETE FROM pending_thread_interactions WHERE thread_id = ? AND turn_id = ?
+    `).run(threadId, turnId);
+  }
+
   attachThread(threadId: string) {
     this.database.prepare(`
       INSERT INTO thread_subscriptions (thread_id, attached_at, last_resumed_at)
@@ -203,6 +287,17 @@ interface SnapshotRow {
   raw_json: string;
 }
 
+interface InteractionRow {
+  request_key: string;
+  request_id_json: string;
+  thread_id: string;
+  turn_id: string | null;
+  item_id: string | null;
+  connection_id: string;
+  payload_json: string;
+  created_at: string;
+}
+
 function mapEvent(row: unknown): DurableThreadEvent {
   const event = row as EventRow;
   return {
@@ -215,6 +310,14 @@ function mapEvent(row: unknown): DurableThreadEvent {
     receivedAt: event.received_at,
     raw: JSON.parse(event.raw_json) as AppServerNotification,
   };
+}
+
+function mapInteraction(row: InteractionRow): PendingThreadInteraction {
+  return JSON.parse(row.payload_json) as PendingThreadInteraction;
+}
+
+function requestKey(requestId: ServerRequestId) {
+  return JSON.stringify(requestId);
 }
 
 function cursorNumber(cursor: StreamCursor | null) {

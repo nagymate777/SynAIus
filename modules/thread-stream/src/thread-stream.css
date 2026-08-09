@@ -110,6 +110,102 @@
   grid-column: 1 / -1;
 }
 
+.thread-stream-interaction {
+  min-width: 0;
+  padding: 0.55rem;
+  border: 1px solid #b88a38;
+  border-radius: 0.5rem;
+  background: #2b210f;
+  color: #f4e7c5;
+  font-size: 0.76rem;
+}
+
+.thread-stream-interactions {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.thread-stream-interaction > strong {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: #ffd989;
+}
+
+.thread-stream-interaction p {
+  margin: 0.4rem 0;
+}
+
+.thread-stream-interaction-detail {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.3fr) minmax(0, 1fr);
+  gap: 0.4rem;
+  margin: 0.25rem 0;
+}
+
+.thread-stream-interaction-detail > span {
+  color: #d4bd89;
+}
+
+.thread-stream-interaction-detail code,
+.thread-stream-interaction-permissions {
+  overflow: auto;
+  color: #f3e5c0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thread-stream-interaction-permissions {
+  max-height: 8rem;
+  padding: 0.35rem;
+  border: 1px solid #5c4824;
+  border-radius: 0.3rem;
+  background: #181207;
+  font-size: 0.7rem;
+}
+
+.thread-stream-interaction fieldset {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.45rem 0;
+  padding: 0.4rem;
+  border: 1px solid #5c4824;
+}
+
+.thread-stream-interaction fieldset label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.thread-stream-interaction fieldset input,
+.thread-stream-interaction fieldset select {
+  min-width: 0;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid #745c2e;
+  border-radius: 0.3rem;
+  background: #181207;
+  color: inherit;
+}
+
+.thread-stream-interaction fieldset small {
+  color: #d4bd89;
+}
+
+.thread-stream-interaction-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.thread-stream-interaction-actions button {
+  padding: 0.35rem 0.45rem;
+}
+
 .thread-stream-new label {
   min-width: 0;
   display: grid;

@@ -53,6 +53,82 @@ export interface CreateCodexThreadInput {
   message: string;
 }
 
+export type ServerRequestId = string | number;
+
+export interface InteractionOption {
+  label: string;
+  description: string;
+}
+
+export interface InteractionQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: InteractionOption[] | null;
+}
+
+interface PendingInteractionBase {
+  requestId: ServerRequestId;
+  threadId: string;
+  turnId: string | null;
+  itemId: string | null;
+  createdAt: string;
+}
+
+export type PendingThreadInteraction = PendingInteractionBase & (
+  | {
+      kind: "commandApproval";
+      reason: string | null;
+      command: string | null;
+      cwd: string | null;
+      networkHost: string | null;
+      networkProtocol: string | null;
+    }
+  | {
+      kind: "fileApproval";
+      reason: string | null;
+      grantRoot: string | null;
+    }
+  | {
+      kind: "userInput";
+      questions: InteractionQuestion[];
+      isBlocking: boolean;
+    }
+  | {
+      kind: "permissionsApproval";
+      reason: string | null;
+      cwd: string | null;
+      requestedPermissions: unknown;
+    }
+  | {
+      kind: "mcpElicitation";
+      serverName: string;
+      mode: "form" | "openai/form" | "url";
+      message: string;
+      url: string | null;
+    }
+);
+
+export type ThreadInteractionResponse =
+  | {
+      kind: "approval";
+      decision: "accept" | "acceptForSession" | "decline" | "cancel";
+    }
+  | {
+      kind: "userInput";
+      answers: Record<string, string[]>;
+    }
+  | {
+      kind: "permissions";
+      decision: "grantTurn" | "grantSession" | "decline";
+    }
+  | {
+      kind: "mcpElicitation";
+      action: "decline" | "cancel";
+    };
+
 export interface ThreadSnapshot {
   threadId: string;
   cursor: StreamCursor | null;
@@ -84,6 +160,12 @@ export interface ThreadStreamGateway {
   listThreads(query?: ThreadListQuery): Promise<ThreadPage>;
   listModels(cursor?: string | null, limit?: number): Promise<CodexModelPage>;
   createThread(input: CreateCodexThreadInput): Promise<ThreadSnapshot>;
+  listInteractions(threadId: string): Promise<PendingThreadInteraction[]>;
+  respondToInteraction(
+    threadId: string,
+    requestId: ServerRequestId,
+    response: ThreadInteractionResponse,
+  ): Promise<void>;
   readThread(threadId: string): Promise<ThreadSnapshot>;
   attachThread(threadId: string, after?: StreamCursor): Promise<ThreadAttachment>;
   resumeThread(threadId: string): Promise<ThreadSnapshot>;

@@ -1,5 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { DurableThreadEvent } from "@synaius/protocol";
+import type {
+  DurableThreadEvent,
+  ServerRequestId,
+  ThreadInteractionResponse,
+} from "@synaius/protocol";
 import type { ThreadStreamService } from "./service.ts";
 
 export interface ThreadStreamHttpServerOptions {
@@ -76,6 +80,28 @@ async function route(
   const threadPath = url.pathname.match(/^\/api\/thread-stream\/threads\/([^/]+)$/);
   if (request.method === "GET" && threadPath) {
     return writeJson(response, 200, await service.readThread(decodeURIComponent(threadPath[1])));
+  }
+
+  const interactionsPath = url.pathname.match(
+    /^\/api\/thread-stream\/threads\/([^/]+)\/interactions$/,
+  );
+  if (interactionsPath) {
+    const threadId = decodeURIComponent(interactionsPath[1]);
+    if (request.method === "GET") {
+      return writeJson(response, 200, { interactions: service.listInteractions(threadId) });
+    }
+    if (request.method === "POST") {
+      const body = await readJsonBody(request);
+      await service.respondToInteraction(
+        threadId,
+        requiredRequestId(body.requestId),
+        requiredRecord(
+          body.response,
+          "thread-stream.interaction.response.required",
+        ) as unknown as ThreadInteractionResponse,
+      );
+      return writeJson(response, 200, { ok: true });
+    }
   }
 
   const actionPath = url.pathname.match(
@@ -225,6 +251,18 @@ function requiredString(value: unknown, code: string) {
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function requiredRequestId(value: unknown): ServerRequestId {
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error("thread-stream.interaction.requestId.required");
+  }
+  return value;
+}
+
+function requiredRecord(value: unknown, code: string) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(code);
+  return value as Record<string, unknown>;
 }
 
 function boundedInteger(value: string | null, fallback: number, minimum: number, maximum: number) {

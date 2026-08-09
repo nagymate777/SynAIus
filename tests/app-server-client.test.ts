@@ -45,6 +45,13 @@ describe("Codex app-server client", () => {
     expect(notifications).toHaveLength(0);
     child.stdout.write(`${line.slice(20)}\n`);
     expect(notifications).toHaveLength(1);
+    client.respondToServerRequest("approval-1", { decision: "decline" });
+    client.respondToServerRequestError("tool-1", -32601, "unsupported");
+    expect(outbound.at(-2)).toEqual({ id: "approval-1", result: { decision: "decline" } });
+    expect(outbound.at(-1)).toEqual({
+      id: "tool-1",
+      error: { code: -32601, message: "unsupported" },
+    });
     client.stop();
   });
 

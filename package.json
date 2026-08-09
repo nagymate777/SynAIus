@@ -15,6 +15,7 @@
     "dev:operai:ui": "npm run dev --workspace @synaius/operai",
     "dev:operai:bridge": "npm run dev --workspace @synaius/operai-bridge",
     "smoke:operai:bridge": "node scripts/smoke-operai-bridge.ts",
+    "smoke:operai:approval": "node scripts/smoke-operai-approval.ts",
     "smoke:operai:workbox": "node scripts/smoke-operai-workbox.ts",
     "build:studio": "npm run build --workspace @synaius/studio",
     "build:operai": "npm run build --workspace @synaius/operai",

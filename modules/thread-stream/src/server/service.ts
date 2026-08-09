@@ -5,7 +5,10 @@ import type {
   CodexModelPage,
   CreateCodexThreadInput,
   DurableThreadEvent,
+  PendingThreadInteraction,
+  ServerRequestId,
   StreamCursor,
+  ThreadInteractionResponse,
   ThreadPage,
   ThreadListQuery,
   ThreadSnapshot,
@@ -43,6 +46,8 @@ export interface ThreadStreamAppServerClient {
   unsubscribeThread(threadId: string): Promise<void>;
   steerTurn(threadId: string, turnId: string, message: string): Promise<void>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
+  respondToServerRequest(requestId: ServerRequestId, result: unknown): void;
+  respondToServerRequestError(requestId: ServerRequestId, code: number, message: string): void;
   on(event: "notification", listener: (payload: {
     connectionId: string;
     notification: AppServerNotification;
@@ -102,20 +107,16 @@ export class ThreadStreamService {
       this.persistThenBroadcast(connectionId, notification);
     });
     this.client.on("serverRequest", ({ connectionId, message }) => {
-      const request = message as { id?: unknown; method?: unknown; params?: unknown };
-      if (typeof request.method !== "string") return;
-      const params = asRecord(request.params);
-      const threadId = extractThreadId(params);
-      if (!threadId) return;
-      this.persistThenBroadcast(connectionId, {
-        method: request.method,
-        params: { ...params, requestId: request.id ?? null },
-      });
+      this.handleServerRequest(connectionId, message);
     });
     this.client.on("disconnected", ({ connectionId, error }) => {
       if (this.stopped) return;
       this.lastError = error;
       this.stopAllPolling();
+      const clearedThreadIds = this.store.clearInteractions(connectionId ?? undefined);
+      clearedThreadIds.forEach((threadId) => {
+        this.appendGatewayEvent(threadId, "gateway/interactionsCleared", {});
+      });
       this.broadcastGatewayEvent("gateway/disconnected", connectionId ?? "disconnected", {
         error: error.message,
       });
@@ -125,6 +126,7 @@ export class ThreadStreamService {
 
   async start() {
     if (!this.stopped) return;
+    this.store.clearInteractions();
     this.stopped = false;
     await this.connect();
   }
@@ -170,6 +172,26 @@ export class ThreadStreamService {
 
   listModels(cursor: string | null = null, limit = 100): Promise<CodexModelPage> {
     return this.client.listModels(cursor, limit);
+  }
+
+  listInteractions(threadId: string) {
+    return this.store.pendingInteractions(threadId);
+  }
+
+  async respondToInteraction(
+    threadId: string,
+    requestId: ServerRequestId,
+    response: ThreadInteractionResponse,
+  ) {
+    const pending = this.store.readInteraction(threadId, requestId);
+    if (!pending) throw Object.assign(new Error("thread-stream.interaction.notFound"), { statusCode: 404 });
+    if (pending.connectionId !== this.client.connectionId) {
+      throw Object.assign(new Error("thread-stream.interaction.stale"), { statusCode: 409 });
+    }
+    const result = interactionResult(pending.interaction, response);
+    this.client.respondToServerRequest(requestId, result);
+    this.store.resolveInteraction(requestId);
+    this.appendGatewayEvent(threadId, "gateway/interactionResponded", { requestId });
   }
 
   async createThread(input: CreateCodexThreadInput): Promise<ThreadSnapshot> {
@@ -372,6 +394,12 @@ export class ThreadStreamService {
     const threadId = extractThreadId(params);
     if (!threadId) return null;
     const turnId = extractTurnId(params);
+    if (notification.method === "serverRequest/resolved") {
+      const requestId = requestIdValue(params.requestId);
+      if (requestId !== null) this.store.resolveInteraction(requestId);
+    } else if (notification.method === "turn/completed") {
+      this.store.clearTurnInteractions(threadId, turnId);
+    }
     const event = this.store.appendEvent({
       threadId,
       turnId,
@@ -383,6 +411,28 @@ export class ThreadStreamService {
     this.updateSnapshotFromNotification(threadId, turnId, notification);
     this.events.emit(`thread:${threadId}`, event);
     return event;
+  }
+
+  private handleServerRequest(connectionId: string, message: unknown) {
+    const request = asRecord(message);
+    const requestId = requestIdValue(request.id);
+    const method = stringValue(request.method);
+    if (requestId === null || !method) return;
+    const interaction = projectServerRequest(requestId, method, request.params);
+    if (!interaction) {
+      this.client.respondToServerRequestError(
+        requestId,
+        -32601,
+        "thread-stream.serverRequest.unsupported",
+      );
+      const threadId = extractThreadId(asRecord(request.params));
+      if (threadId) {
+        this.appendGatewayEvent(threadId, "gateway/serverRequestRejected", { method, requestId });
+      }
+      return;
+    }
+    this.store.saveInteraction(interaction, connectionId);
+    this.appendGatewayEvent(interaction.threadId, "gateway/interactionRequested", { interaction });
   }
 
   private updateSnapshotFromNotification(
@@ -491,6 +541,149 @@ export class ThreadStreamService {
   }
 }
 
+export function projectServerRequest(
+  requestId: ServerRequestId,
+  method: string,
+  rawParams: unknown,
+): PendingThreadInteraction | null {
+  const params = asRecord(rawParams);
+  const threadId = extractThreadId(params);
+  if (!threadId) return null;
+  const base = {
+    requestId,
+    threadId,
+    turnId: stringValue(params.turnId),
+    itemId: stringValue(params.itemId),
+    createdAt: new Date().toISOString(),
+  };
+  if (method === "item/commandExecution/requestApproval") {
+    const network = asRecord(params.networkApprovalContext);
+    return {
+      ...base,
+      kind: "commandApproval",
+      reason: stringValue(params.reason),
+      command: stringValue(params.command),
+      cwd: stringValue(params.cwd),
+      networkHost: stringValue(network.host),
+      networkProtocol: stringValue(network.protocol),
+    };
+  }
+  if (method === "item/fileChange/requestApproval") {
+    return {
+      ...base,
+      kind: "fileApproval",
+      reason: stringValue(params.reason),
+      grantRoot: stringValue(params.grantRoot),
+    };
+  }
+  if (method === "item/tool/requestUserInput") {
+    const questions = (Array.isArray(params.questions) ? params.questions : []).flatMap((value) => {
+      const question = asRecord(value);
+      const id = stringValue(question.id);
+      const header = stringValue(question.header);
+      const prompt = stringValue(question.question);
+      if (!id || !header || !prompt) return [];
+      const options = question.options === null
+        ? null
+        : (Array.isArray(question.options) ? question.options : []).flatMap((candidate) => {
+            const option = asRecord(candidate);
+            const label = stringValue(option.label);
+            const description = stringValue(option.description);
+            return label && description ? [{ label, description }] : [];
+          });
+      return [{
+        id,
+        header,
+        question: prompt,
+        isOther: question.isOther === true,
+        isSecret: !!question.isSecret,
+        options,
+      }];
+    });
+    if (!questions.length) return null;
+    return {
+      ...base,
+      kind: "userInput",
+      questions,
+      isBlocking: params.isBlocking === true,
+    };
+  }
+  if (method === "item/permissions/requestApproval") {
+    return {
+      ...base,
+      kind: "permissionsApproval",
+      reason: stringValue(params.reason),
+      cwd: stringValue(params.cwd),
+      requestedPermissions: structuredClone(params.permissions ?? {}),
+    };
+  }
+  if (method === "mcpServer/elicitation/request") {
+    const mode = params.mode;
+    if (mode !== "form" && mode !== "openai/form" && mode !== "url") return null;
+    const serverName = stringValue(params.serverName);
+    const message = stringValue(params.message);
+    if (!serverName || !message) return null;
+    return {
+      ...base,
+      kind: "mcpElicitation",
+      serverName,
+      mode,
+      message,
+      url: mode === "url" ? stringValue(params.url) : null,
+    };
+  }
+  return null;
+}
+
+function interactionResult(
+  interaction: PendingThreadInteraction,
+  response: ThreadInteractionResponse,
+) {
+  if ((interaction.kind === "commandApproval" || interaction.kind === "fileApproval")
+    && response.kind === "approval") {
+    return { decision: response.decision };
+  }
+  if (interaction.kind === "userInput" && response.kind === "userInput") {
+    const answers: Record<string, { answers: string[] }> = {};
+    for (const question of interaction.questions) {
+      const values = response.answers[question.id];
+      if (!Array.isArray(values) || values.length !== 1 || typeof values[0] !== "string"
+        || !values[0].trim()) {
+        throw invalidInteractionResponse();
+      }
+      if (question.options?.length && !question.isOther
+        && !question.options.some((option) => option.label === values[0])) {
+        throw invalidInteractionResponse();
+      }
+      answers[question.id] = { answers: [values[0]] };
+    }
+    return { answers };
+  }
+  if (interaction.kind === "permissionsApproval" && response.kind === "permissions") {
+    if (response.decision === "decline") return { permissions: {}, scope: "turn" };
+    const requested = asRecord(interaction.requestedPermissions);
+    const permissions: Record<string, unknown> = {};
+    if (requested.network !== null && requested.network !== undefined) {
+      permissions.network = structuredClone(requested.network);
+    }
+    if (requested.fileSystem !== null && requested.fileSystem !== undefined) {
+      permissions.fileSystem = structuredClone(requested.fileSystem);
+    }
+    return {
+      permissions,
+      scope: response.decision === "grantSession" ? "session" : "turn",
+    };
+  }
+  if (interaction.kind === "mcpElicitation" && response.kind === "mcpElicitation") {
+    return { action: response.action, content: null, _meta: null };
+  }
+  throw invalidInteractionResponse();
+}
+
+function invalidInteractionResponse() {
+  return Object.assign(new Error("thread-stream.interaction.response.invalid"), { statusCode: 400 });
+}
+
 function isActiveWriterError(error: unknown) {
   return error instanceof Error && error.message.toLocaleLowerCase().includes("active writer");
 }
@@ -529,4 +722,11 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value : null;
+}
+
+function requestIdValue(value: unknown): ServerRequestId | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

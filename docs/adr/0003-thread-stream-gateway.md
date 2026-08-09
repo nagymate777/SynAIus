@@ -23,6 +23,12 @@ A feladatválasztó a lapozott `thread/list` szerződést és annak `searchTerm`
 
 Minden böngészős csatlakozás egy véletlen azonosítójú mellékletet kap. A stream csak ezzel az azonosítóval nyitható meg, és a feladatváltás vagy a renderer lebontása kifejezett leválasztást küld. Az utolsó melléklet megszűnésekor a bridge `thread/unsubscribe` kéréssel leválik az app-serverről, eltávolítja a tartós feliratkozást és leállítja az esetleges megfigyelői pollingot.
 
+## Szerver által kezdeményezett interakciók
+
+A parancsvégrehajtási, fájlmódosítási és jogosultsági jóváhagyások, valamint a felhasználói kérdések tartós függő interakcióként kerülnek SQLite-ba még a böngészős sugárzás előtt. Válasz kizárólag azon az élő app-server kapcsolaton küldhető, amelyen a kérés érkezett; újracsatlakozáskor a korábbi kapcsolat függő kérései elévülnek. A már feloldott vagy elavult kérésekre adott válasz hibával leáll.
+
+A bridge csak az app-server által kért jogosultság pontos részhalmazát adhatja meg, és az ismeretlen szerverkéréseket automatikus engedélyezés helyett JSON-RPC hibával utasítja el. A titkos felhasználói válasz kizárólag az aktív HTTP-kérésben és az app-server válaszában szerepelhet; nem kerül eseménynaplóba vagy tartós tárba. Az MCP-elicitation jelenleg biztonságosan elutasítható vagy megszakítható; strukturált elfogadó űrlap külön későbbi bővítés.
+
 ## Következmények
 
 - A stream a böngésző vagy a bridge rövid kiesése után kurzorról folytatható.

@@ -7,6 +7,7 @@ import type {
   AppServerNotification,
   CodexModelPage,
   CreateCodexThreadInput,
+  ServerRequestId,
   ThreadPage,
   ThreadSnapshot,
 } from "@synaius/protocol";
@@ -159,6 +160,97 @@ describe("thread stream service", () => {
     });
     service.close();
   });
+
+  it("persists approval requests before broadcasting and returns decisions on the same connection", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "synaius-thread-service-"));
+    temporaryDirectories.push(directory);
+    const store = new ThreadEventStore(join(directory, "events.sqlite"));
+    const client = new FakeAppServerClient();
+    const service = new ThreadStreamService({ store, client });
+    await service.start();
+
+    let persistedBeforeBroadcast = false;
+    service.subscribe("thread-approval", () => {
+      persistedBeforeBroadcast = service.listInteractions("thread-approval").length === 1;
+    });
+    client.serverRequest({
+      id: 17,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-approval",
+        turnId: "turn-1",
+        itemId: "item-1",
+        reason: "Hálózati hozzáférés",
+        command: "tool --check",
+        cwd: "C:/project",
+        networkApprovalContext: { host: "example.test", protocol: "https" },
+      },
+    });
+
+    expect(persistedBeforeBroadcast).toBe(true);
+    expect(service.listInteractions("thread-approval")).toMatchObject([{
+      requestId: 17,
+      kind: "commandApproval",
+      networkHost: "example.test",
+      command: "tool --check",
+    }]);
+    await service.respondToInteraction("thread-approval", 17, {
+      kind: "approval",
+      decision: "accept",
+    });
+    expect(client.serverResponses).toEqual([{ requestId: 17, result: { decision: "accept" } }]);
+    expect(service.listInteractions("thread-approval")).toEqual([]);
+    service.close();
+  });
+
+  it("keeps user secrets out of the event log and fails closed for unknown requests", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "synaius-thread-service-"));
+    temporaryDirectories.push(directory);
+    const store = new ThreadEventStore(join(directory, "events.sqlite"));
+    const client = new FakeAppServerClient();
+    const service = new ThreadStreamService({ store, client });
+    await service.start();
+
+    client.serverRequest({
+      id: "question-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-question",
+        turnId: "turn-1",
+        itemId: "item-1",
+        isBlocking: true,
+        questions: [{
+          id: "secret",
+          header: "Titok",
+          question: "Add meg",
+          isOther: false,
+          isSecret: true,
+          options: null,
+        }],
+      },
+    });
+    await service.respondToInteraction("thread-question", "question-1", {
+      kind: "userInput",
+      answers: { secret: ["private-answer"] },
+    });
+    expect(client.serverResponses.at(-1)).toMatchObject({
+      requestId: "question-1",
+      result: { answers: { secret: { answers: ["private-answer"] } } },
+    });
+    expect(JSON.stringify(store.eventsAfter("thread-question"))).not.toContain("private-answer");
+
+    client.serverRequest({
+      id: 99,
+      method: "item/tool/call",
+      params: { threadId: "thread-question", turnId: "turn-1" },
+    });
+    expect(client.serverErrors).toEqual([{
+      requestId: 99,
+      code: -32601,
+      message: "thread-stream.serverRequest.unsupported",
+    }]);
+    service.close();
+  });
 });
 
 class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerClient {
@@ -177,6 +269,8 @@ class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerC
     effort?: string | null;
   }> = [];
   unsubscribed: string[] = [];
+  serverResponses: Array<{ requestId: ServerRequestId; result: unknown }> = [];
+  serverErrors: Array<{ requestId: ServerRequestId; code: number; message: string }> = [];
 
   async start() {
     this.startCount += 1;
@@ -230,8 +324,20 @@ class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerC
   async steerTurn() {}
   async interruptTurn() {}
 
+  respondToServerRequest(requestId: ServerRequestId, result: unknown) {
+    this.serverResponses.push({ requestId, result });
+  }
+
+  respondToServerRequestError(requestId: ServerRequestId, code: number, message: string) {
+    this.serverErrors.push({ requestId, code, message });
+  }
+
   notification(notification: AppServerNotification) {
     this.emit("notification", { connectionId: this.connectionId!, notification });
+  }
+
+  serverRequest(message: unknown) {
+    this.emit("serverRequest", { connectionId: this.connectionId!, message });
   }
 
   disconnect() {
