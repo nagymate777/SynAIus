@@ -68,6 +68,34 @@ describe("Codex app-server client", () => {
           items: [
             { id: "reasoning-1", type: "reasoning", content: ["private"] },
             { id: "agent-1", type: "agentMessage", text: "Készül" },
+            {
+              id: "command-1",
+              type: "commandExecution",
+              command: "npm test",
+              cwd: "C:/project",
+              status: "completed",
+              aggregatedOutput: "ok",
+              exitCode: 0,
+              durationMs: 10,
+              privateInternalField: "not-for-viewer",
+            },
+            {
+              id: "file-1",
+              type: "fileChange",
+              status: "completed",
+              changes: [{ path: "src/app.ts", kind: "update", diff: "+new" }],
+            },
+            {
+              id: "mcp-1",
+              type: "mcpToolCall",
+              server: "example",
+              tool: "read",
+              status: "completed",
+              arguments: { id: 1 },
+              result: { structuredContent: { ok: true } },
+              error: null,
+              durationMs: 12,
+            },
           ],
         },
       ],
@@ -79,7 +107,18 @@ describe("Codex app-server client", () => {
       status: "active",
     });
     expect(JSON.stringify(snapshot.raw)).not.toContain("private");
+    expect(JSON.stringify(snapshot.raw)).not.toContain("not-for-viewer");
     expect(JSON.stringify(snapshot.raw)).toContain("Készül");
+    expect(snapshot.raw).toMatchObject({
+      turns: [{}, {
+        items: [
+          { type: "agentMessage" },
+          { type: "commandExecution", aggregatedOutput: "ok", exitCode: 0 },
+          { type: "fileChange", changes: [{ path: "src/app.ts", diff: "+new" }] },
+          { type: "mcpToolCall", argumentsPreview: expect.stringContaining("id") },
+        ],
+      }],
+    });
     expect(reconnectDelayMs(1, 100, 500)).toBe(100);
     expect(reconnectDelayMs(8, 100, 500)).toBe(500);
   });

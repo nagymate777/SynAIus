@@ -9,7 +9,7 @@ A Codex app-server integráció külön `thread-stream` modul mögött marad. A 
 
 Az app-server kapcsolat egyszeri `initialize`/`initialized` kézfogást, korrelált JSONL-kéréseket, stale-processz védelmet, kérés-időkorlátot és korlátozott exponenciális újracsatlakozást használ. A bridge minden fogadott app-server értesítést előbb SQLite-ba ír, és csak utána sugároz. Az SSE-esemény monoton kurzort kap; újracsatlakozáskor a `Last-Event-ID` vagy a lekérdezési kurzor alapján történik a visszajátszás.
 
-A nyers reasoning-szöveg értesítését az app-server képességeinél pontos metódusnévvel kikapcsoljuk. A `thread/read` eredményéből a böngésző csak a megjelenítő számára szükséges felhasználói és ügynöküzeneteket kapja; fájlutak, teljes nyers thread-rekordok és reasoning-tartalom nem kerülnek a listázási vagy snapshot DTO-ba.
+A nyers reasoning-szöveg értesítését az app-server képességeinél pontos metódusnévvel kikapcsoljuk. A `thread/read` eredményéből a böngésző csak a megjelenítő számára szükséges felhasználói és ügynöküzeneteket, valamint a parancs-, fájlmódosítás-, MCP- és dinamikus eszközitemek szigorúan engedélyezett mezőit kapja. A parancskimenet, a fájlutak és diffek, illetve az eszközargumentumok és -eredmények méretkorlátos előnézetként jelenhetnek meg; a teljes nyers thread-rekord és a reasoning-tartalom nem kerül a snapshot DTO-ba.
 
 ## Aktív író kezelése
 

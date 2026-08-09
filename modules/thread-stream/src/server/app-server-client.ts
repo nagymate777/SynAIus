@@ -18,6 +18,8 @@ import type {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_EXECUTABLE = join(homedir(), ".codex", "plugins", ".plugin-appserver", "codex.exe");
+const MAX_VIEWER_TEXT = 200_000;
+const MAX_VIEWER_JSON = 50_000;
 
 export interface AppServerClientOptions {
   executable?: string;
@@ -350,23 +352,99 @@ function projectThreadForViewer(thread: Record<string, unknown>, threadId: strin
         .flatMap((item): Array<Record<string, unknown>> => {
           const id = stringValue(item.id);
           if (!id) return [];
-          if (item.type === "agentMessage") {
-            return [{ id, type: "agentMessage", text: stringValue(item.text) ?? "" }];
-          }
-          if (item.type === "userMessage") {
-            const content = Array.isArray(item.content) ? item.content.map(asRecord) : [];
-            return [{
-              id,
-              type: "userMessage",
-              content: content.flatMap((part) => part.type === "text" && typeof part.text === "string"
-                ? [{ type: "text", text: part.text }]
-                : []),
-            }];
-          }
-          return [];
+          const projected = projectItemForViewer(item, id);
+          return projected ? [projected] : [];
         }),
     })),
   };
+}
+
+function projectItemForViewer(item: Record<string, unknown>, id: string) {
+  if (item.type === "agentMessage") {
+    return { id, type: "agentMessage", text: boundedViewerText(stringValue(item.text) ?? "") };
+  }
+  if (item.type === "userMessage") {
+    const content = Array.isArray(item.content) ? item.content.map(asRecord) : [];
+    return {
+      id,
+      type: "userMessage",
+      content: content.flatMap((part) => part.type === "text" && typeof part.text === "string"
+        ? [{ type: "text", text: boundedViewerText(part.text) }]
+        : []),
+    };
+  }
+  if (item.type === "commandExecution") {
+    return {
+      id,
+      type: "commandExecution",
+      command: boundedViewerText(stringValue(item.command) ?? ""),
+      cwd: boundedViewerText(stringValue(item.cwd) ?? ""),
+      status: structuredClone(item.status ?? null),
+      aggregatedOutput: boundedViewerText(stringValue(item.aggregatedOutput) ?? ""),
+      exitCode: finiteNumber(item.exitCode),
+      durationMs: finiteNumber(item.durationMs),
+    };
+  }
+  if (item.type === "fileChange") {
+    return {
+      id,
+      type: "fileChange",
+      status: structuredClone(item.status ?? null),
+      changes: (Array.isArray(item.changes) ? item.changes.map(asRecord) : []).flatMap((change) => {
+        const path = stringValue(change.path);
+        if (!path) return [];
+        return [{
+          path: boundedViewerText(path),
+          kind: stringValue(change.kind) ?? "unknown",
+          diff: boundedViewerText(stringValue(change.diff) ?? ""),
+        }];
+      }),
+    };
+  }
+  if (item.type === "mcpToolCall") {
+    return {
+      id,
+      type: "mcpToolCall",
+      server: boundedViewerText(stringValue(item.server) ?? ""),
+      tool: boundedViewerText(stringValue(item.tool) ?? ""),
+      status: structuredClone(item.status ?? null),
+      argumentsPreview: viewerJsonPreview(item.arguments),
+      resultPreview: viewerJsonPreview(item.result),
+      error: boundedViewerText(stringValue(asRecord(item.error).message) ?? ""),
+      durationMs: finiteNumber(item.durationMs),
+    };
+  }
+  if (item.type === "dynamicToolCall") {
+    return {
+      id,
+      type: "dynamicToolCall",
+      namespace: stringValue(item.namespace),
+      tool: boundedViewerText(stringValue(item.tool) ?? ""),
+      status: structuredClone(item.status ?? null),
+      argumentsPreview: viewerJsonPreview(item.arguments),
+      resultPreview: viewerJsonPreview(item.contentItems),
+      success: typeof item.success === "boolean" ? item.success : null,
+      durationMs: finiteNumber(item.durationMs),
+    };
+  }
+  return null;
+}
+
+function boundedViewerText(value: string, maximum = MAX_VIEWER_TEXT) {
+  return value.length <= maximum ? value : value.slice(value.length - maximum);
+}
+
+function viewerJsonPreview(value: unknown) {
+  if (value === null || value === undefined) return null;
+  try {
+    return boundedViewerText(JSON.stringify(value, null, 2), MAX_VIEWER_JSON);
+  } catch {
+    return boundedViewerText(String(value), MAX_VIEWER_JSON);
+  }
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function toThreadSummary(raw: unknown): ThreadSummary {

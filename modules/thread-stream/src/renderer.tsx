@@ -13,18 +13,22 @@ import type {
   ThreadSummary,
 } from "@synaius/protocol";
 import type { WorkspaceContentRenderContext } from "@synaius/workspace-ui";
+import {
+  projectThreadEvent,
+  projectThreadSnapshot,
+  type ThreadActivity,
+  type ThreadActivityStatus,
+  type ThreadStreamLine,
+} from "./activity.ts";
 import { THREAD_STREAM_CONTENT_TYPE, THREAD_STREAM_RENDERER_VERSION } from "./index";
 import "./thread-stream.css";
+
+export { projectThreadEvent, projectThreadSnapshot } from "./activity.ts";
+export type { ThreadActivity, ThreadActivityStatus, ThreadStreamLine } from "./activity.ts";
 
 export interface ThreadStreamRendererOptions {
   gateway: ThreadStreamGateway;
   localeMessages: TranslationDictionary;
-}
-
-export interface ThreadStreamLine {
-  id: string;
-  kind: "user" | "agent" | "activity";
-  text: string;
 }
 
 export function createThreadStreamRenderer(
@@ -449,11 +453,13 @@ function ThreadStreamPanel({
           {configuredThreadId && lines.length === 0 && interactions.length === 0 && !errorKey && (
             <p className="thread-stream-empty">{t("module.thread-stream.thread.waiting")}</p>
           )}
-          {lines.map((line) => (
-            <article className="thread-stream-line" data-kind={line.kind} key={line.id}>
-              {line.text}
-            </article>
-          ))}
+          {lines.map((line) => line.kind === "activity"
+            ? <ThreadActivityCard activity={line.activity} key={line.id} t={t} />
+            : (
+                <article className="thread-stream-line" data-kind={line.kind} key={line.id}>
+                  {line.text}
+                </article>
+              ))}
         </div>
       )}
       <div className="thread-stream-error" role="alert">{errorKey ? t(errorKey) : ""}</div>
@@ -476,6 +482,231 @@ function ThreadStreamPanel({
       </form>
     </section>
   );
+}
+
+function ThreadActivityCard({
+  activity,
+  t,
+}: {
+  activity: ThreadActivity;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  const [open, setOpen] = useState(activity.status === "inProgress" || activity.status === "failed");
+  useEffect(() => {
+    if (activity.status === "failed") setOpen(true);
+  }, [activity.status]);
+  const summary = activitySummary(activity, t);
+  return (
+    <details
+      className="thread-stream-activity"
+      data-kind={activity.kind}
+      data-status={activity.status}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      open={open}
+    >
+      <summary>
+        <span aria-hidden="true" className="thread-stream-disclosure" />
+        <span className="thread-stream-activity-title">{t(activityTitleKey(activity.kind))}</span>
+        {summary && <code>{summary}</code>}
+        <span className="thread-stream-activity-status">{t(activityStatusKey(activity.status))}</span>
+      </summary>
+      {open && <div className="thread-stream-activity-body">
+        {activity.kind === "command" && (
+          <>
+            {activity.command && (
+              <ActivityDetail label={t("module.thread-stream.activity.command")} value={activity.command} />
+            )}
+            {activity.cwd && (
+              <ActivityDetail label={t("module.thread-stream.activity.cwd")} value={activity.cwd} />
+            )}
+            {activity.exitCode !== null && (
+              <ActivityDetail
+                label={t("module.thread-stream.activity.exitCode")}
+                value={String(activity.exitCode)}
+              />
+            )}
+            {activity.durationMs !== null && (
+              <ActivityDetail
+                label={t("module.thread-stream.activity.duration")}
+                value={t("module.thread-stream.activity.duration.ms", {
+                  duration: Math.round(activity.durationMs),
+                })}
+              />
+            )}
+            {activity.output && (
+              <ActivityCodeBlock
+                label={t("module.thread-stream.activity.output")}
+                value={activity.output}
+              />
+            )}
+          </>
+        )}
+        {activity.kind === "fileChange" && (
+          <div className="thread-stream-file-changes">
+            {activity.changes.map((change, index) => (
+              <details className="thread-stream-file-change" key={`${index}:${change.path}`}>
+                <summary>
+                  <span aria-hidden="true" className="thread-stream-disclosure" />
+                  <span data-kind={change.kind}>{t(fileChangeKindKey(change.kind))}</span>
+                  <code>{change.path}</code>
+                </summary>
+                {change.diff
+                  ? <pre>{change.diff}</pre>
+                  : <p>{t("module.thread-stream.activity.diff.empty")}</p>}
+              </details>
+            ))}
+            {!activity.changes.length && (
+              <p>{t("module.thread-stream.activity.files.empty")}</p>
+            )}
+          </div>
+        )}
+        {activity.kind === "turnDiff" && (
+          activity.diff
+            ? <ActivityCodeBlock label={t("module.thread-stream.activity.diff")} value={activity.diff} />
+            : <p>{t("module.thread-stream.activity.diff.empty")}</p>
+        )}
+        {activity.kind === "mcpTool" && (
+          <>
+            {activity.server && (
+              <ActivityDetail label={t("module.thread-stream.activity.server")} value={activity.server} />
+            )}
+            {activity.tool && (
+              <ActivityDetail label={t("module.thread-stream.activity.tool")} value={activity.tool} />
+            )}
+            {activity.durationMs !== null && (
+              <ActivityDetail
+                label={t("module.thread-stream.activity.duration")}
+                value={t("module.thread-stream.activity.duration.ms", {
+                  duration: Math.round(activity.durationMs),
+                })}
+              />
+            )}
+            {activity.argumentsPreview && (
+              <ActivityCodeBlock
+                label={t("module.thread-stream.activity.arguments")}
+                value={activity.argumentsPreview}
+              />
+            )}
+            {activity.progress.length > 0 && (
+              <ActivityCodeBlock
+                label={t("module.thread-stream.activity.progress")}
+                value={activity.progress.join("\n")}
+              />
+            )}
+            {activity.resultPreview && (
+              <ActivityCodeBlock
+                label={t("module.thread-stream.activity.result")}
+                value={activity.resultPreview}
+              />
+            )}
+            {activity.error && (
+              <ActivityCodeBlock
+                error
+                label={t("module.thread-stream.activity.error")}
+                value={activity.error}
+              />
+            )}
+          </>
+        )}
+        {activity.kind === "dynamicTool" && (
+          <>
+            {activity.namespace && (
+              <ActivityDetail label={t("module.thread-stream.activity.namespace")} value={activity.namespace} />
+            )}
+            {activity.tool && (
+              <ActivityDetail label={t("module.thread-stream.activity.tool")} value={activity.tool} />
+            )}
+            {activity.durationMs !== null && (
+              <ActivityDetail
+                label={t("module.thread-stream.activity.duration")}
+                value={t("module.thread-stream.activity.duration.ms", {
+                  duration: Math.round(activity.durationMs),
+                })}
+              />
+            )}
+            {activity.success !== null && (
+              <ActivityDetail
+                label={t("module.thread-stream.activity.success")}
+                value={t(activity.success
+                  ? "module.thread-stream.activity.boolean.yes"
+                  : "module.thread-stream.activity.boolean.no")}
+              />
+            )}
+            {activity.argumentsPreview && (
+              <ActivityCodeBlock
+                label={t("module.thread-stream.activity.arguments")}
+                value={activity.argumentsPreview}
+              />
+            )}
+            {activity.resultPreview && (
+              <ActivityCodeBlock
+                label={t("module.thread-stream.activity.result")}
+                value={activity.resultPreview}
+              />
+            )}
+          </>
+        )}
+      </div>}
+    </details>
+  );
+}
+
+function ActivityDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="thread-stream-activity-detail">
+      <span>{label}</span>
+      <code>{value}</code>
+    </div>
+  );
+}
+
+function ActivityCodeBlock({
+  label,
+  value,
+  error = false,
+}: {
+  label: string;
+  value: string;
+  error?: boolean;
+}) {
+  return (
+    <div className="thread-stream-activity-code" data-error={error}>
+      <span>{label}</span>
+      <pre>{value}</pre>
+    </div>
+  );
+}
+
+function activitySummary(
+  activity: ThreadActivity,
+  t: ReturnType<typeof createTranslator>,
+) {
+  if (activity.kind === "command") return activity.command.split(/\r?\n/, 1)[0];
+  if (activity.kind === "fileChange") {
+    return t("module.thread-stream.activity.files.count", { count: activity.changes.length });
+  }
+  if (activity.kind === "mcpTool") return [activity.server, activity.tool].filter(Boolean).join(" / ");
+  if (activity.kind === "dynamicTool") return [activity.namespace, activity.tool].filter(Boolean).join(" / ");
+  return "";
+}
+
+function activityTitleKey(kind: ThreadActivity["kind"]) {
+  const keys: Record<ThreadActivity["kind"], string> = {
+    command: "module.thread-stream.activity.command.title",
+    fileChange: "module.thread-stream.activity.fileChange.title",
+    turnDiff: "module.thread-stream.activity.turnDiff.title",
+    mcpTool: "module.thread-stream.activity.mcpTool.title",
+    dynamicTool: "module.thread-stream.activity.dynamicTool.title",
+  };
+  return keys[kind];
+}
+
+function activityStatusKey(status: ThreadActivityStatus) {
+  return `module.thread-stream.activity.status.${status}`;
+}
+
+function fileChangeKindKey(kind: "add" | "update" | "delete" | "unknown") {
+  return `module.thread-stream.activity.fileKind.${kind}`;
 }
 
 function ThreadInteractionCard({
@@ -758,57 +989,6 @@ function effortLabel(t: ReturnType<typeof createTranslator>, effort: string) {
     ultra: "module.thread-stream.effort.ultra",
   };
   return known[effort] ? t(known[effort]) : t("module.thread-stream.effort.custom", { effort });
-}
-
-export function projectThreadSnapshot(snapshot: ThreadSnapshot): ThreadStreamLine[] {
-  const thread = asRecord(snapshot.raw);
-  const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  return turns.flatMap((turn) => {
-    const turnRecord = asRecord(turn);
-    const items = Array.isArray(turnRecord.items) ? turnRecord.items : [];
-    return items.flatMap((item) => lineFromItem(asRecord(item)));
-  });
-}
-
-export function projectThreadEvent(
-  current: ThreadStreamLine[],
-  event: DurableThreadEvent,
-): ThreadStreamLine[] {
-  const params = asRecord(event.raw.params);
-  if (event.method === "item/agentMessage/delta") {
-    const itemId = stringValue(params.itemId) ?? `cursor:${event.cursor}`;
-    const delta = stringValue(params.delta) ?? "";
-    const existingIndex = current.findIndex((line) => line.id === itemId);
-    if (existingIndex < 0) return [...current, { id: itemId, kind: "agent", text: delta }];
-    return current.map((line, index) => index === existingIndex ? { ...line, text: `${line.text}${delta}` } : line);
-  }
-  if (event.method === "item/completed") {
-    const lines = lineFromItem(asRecord(params.item));
-    if (!lines.length) return current;
-    const incoming = lines[0];
-    const existingIndex = current.findIndex((line) => line.id === incoming.id);
-    if (existingIndex < 0) return [...current, incoming];
-    return current.map((line, index) => index === existingIndex ? incoming : line);
-  }
-  return current;
-}
-
-function lineFromItem(item: Record<string, unknown>): ThreadStreamLine[] {
-  const id = stringValue(item.id) ?? "";
-  if (!id) return [];
-  if (item.type === "agentMessage") {
-    const text = stringValue(item.text) ?? "";
-    return text ? [{ id, kind: "agent", text }] : [];
-  }
-  if (item.type === "userMessage") {
-    const content = Array.isArray(item.content) ? item.content : [];
-    const text = content
-      .map((part) => stringValue(asRecord(part).text))
-      .filter((part): part is string => Boolean(part))
-      .join("\n");
-    return text ? [{ id, kind: "user", text }] : [];
-  }
-  return [];
 }
 
 function updateSnapshotStatus(
