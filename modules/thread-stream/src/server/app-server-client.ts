@@ -348,6 +348,10 @@ function projectThreadForViewer(thread: Record<string, unknown>, threadId: strin
     turns: turns.map((turn) => ({
       id: stringValue(turn.id),
       status: structuredClone(turn.status ?? null),
+      error: stringValue(asRecord(turn.error).message)
+        ? { message: boundedViewerText(stringValue(asRecord(turn.error).message)!) }
+        : null,
+      durationMs: finiteNumber(turn.durationMs),
       items: (Array.isArray(turn.items) ? turn.items.map(asRecord) : [])
         .flatMap((item): Array<Record<string, unknown>> => {
           const id = stringValue(item.id);

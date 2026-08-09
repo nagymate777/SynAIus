@@ -5,7 +5,7 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
   gap: 0.4rem;
   padding: 0.55rem;
   color: #e9f4f2;
@@ -80,6 +80,46 @@
   white-space: nowrap;
 }
 
+.thread-stream-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.thread-stream-filters {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  gap: 0.3rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.thread-stream-filters button,
+.thread-stream-latest {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.42rem;
+  border: 1px solid #36535b;
+  border-radius: 999px;
+  background: #07171d;
+  color: #91aaa8;
+  font-size: 0.67rem;
+  white-space: nowrap;
+}
+
+.thread-stream-filters button[data-active="true"] {
+  border-color: #4b8f87;
+  background: #14332f;
+  color: #b9e8df;
+}
+
+.thread-stream-latest {
+  border-color: #3d7a9a;
+  background: #102d3a;
+  color: #a9def0;
+}
+
 .thread-stream-compose[hidden] {
   display: none;
 }
@@ -108,6 +148,122 @@
 .thread-stream-new-message,
 .thread-stream-new-actions {
   grid-column: 1 / -1;
+}
+
+.thread-stream-turn {
+  min-width: 0;
+  border: 1px solid #29454d;
+  border-radius: 0.58rem;
+  background: rgb(6 20 26 / 88%);
+}
+
+.thread-stream-turn[data-status="inProgress"] {
+  border-color: #3c8194;
+  box-shadow: inset 0.2rem 0 0 #4aa9bd;
+}
+
+.thread-stream-turn[data-status="failed"] {
+  border-color: #9d484d;
+  box-shadow: inset 0.2rem 0 0 #b55252;
+}
+
+.thread-stream-turn[data-status="interrupted"] {
+  border-color: #80683d;
+  box-shadow: inset 0.2rem 0 0 #9b7847;
+}
+
+.thread-stream-turn > summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.46rem 0.55rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.thread-stream-turn > summary::-webkit-details-marker {
+  display: none;
+}
+
+.thread-stream-turn[open] > summary > .thread-stream-disclosure {
+  transform: rotate(45deg);
+}
+
+.thread-stream-turn-title {
+  color: #c2dedb;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.thread-stream-turn-preview {
+  min-width: 0;
+  overflow: hidden;
+  color: #8fa9a8;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-stream-turn-count {
+  color: #809b9b;
+  font-size: 0.64rem;
+  white-space: nowrap;
+}
+
+.thread-stream-turn-status {
+  padding: 0.12rem 0.34rem;
+  border-radius: 999px;
+  background: #17333b;
+  color: #91c8bf;
+  font-size: 0.64rem;
+  white-space: nowrap;
+}
+
+.thread-stream-turn[data-status="inProgress"] .thread-stream-turn-status {
+  background: #173b48;
+  color: #8ad7e9;
+}
+
+.thread-stream-turn[data-status="failed"] .thread-stream-turn-status {
+  background: #4a1f22;
+  color: #ffaaaa;
+}
+
+.thread-stream-turn[data-status="interrupted"] .thread-stream-turn-status {
+  background: #3e301b;
+  color: #e6c27e;
+}
+
+.thread-stream-turn-unread {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #62cce2;
+  box-shadow: 0 0 0.45rem #62cce2;
+}
+
+.thread-stream-turn-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.15rem 0.5rem 0.5rem;
+  border-top: 1px solid #203941;
+}
+
+.thread-stream-turn-error {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.35rem;
+  padding: 0.45rem;
+  border: 1px solid #71393d;
+  border-radius: 0.4rem;
+  background: #2b1518;
+  color: #ffb5b5;
+  font-size: 0.72rem;
 }
 
 .thread-stream-interaction {
@@ -463,6 +619,28 @@
 }
 
 @media (max-width: 42rem) {
+  .thread-stream-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .thread-stream-latest {
+    align-self: flex-end;
+  }
+
+  .thread-stream-turn > summary {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
+
+  .thread-stream-turn-preview {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+
+  .thread-stream-turn-count {
+    display: none;
+  }
+
   .thread-stream-activity > summary {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createWorkspace } from "@synaius/domain";
 import {
+  createThreadStreamFilters,
+  eventUnreadKey,
+  filterThreadLines,
   projectThreadEvent,
   projectThreadInteractions,
   projectThreadSnapshot,
+  projectThreadTurnEvent,
+  projectThreadTurns,
 } from "@synaius/module-thread-stream/renderer";
 import type { DurableThreadEvent, PendingThreadInteraction, ThreadSnapshot } from "@synaius/protocol";
 import {
@@ -42,6 +47,8 @@ describe("OperAI thread-stream composition", () => {
       accessMode: "interactive",
       raw: {
         turns: [{
+          id: "turn-1",
+          status: "inProgress",
           items: [
             { id: "user-1", type: "userMessage", content: [{ type: "text", text: "Kezdjük" }] },
             { id: "agent-1", type: "agentMessage", text: "Rendben" },
@@ -52,8 +59,8 @@ describe("OperAI thread-stream composition", () => {
     const initial = projectThreadSnapshot(snapshot);
     const delta = event("3", "item/agentMessage/delta", { itemId: "agent-1", delta: ", mehet." });
     expect(projectThreadEvent(initial, delta)).toEqual([
-      { id: "user-1", kind: "user", text: "Kezdjük" },
-      { id: "agent-1", kind: "agent", text: "Rendben, mehet." },
+      { id: "user-1", turnId: "turn-1", kind: "user", text: "Kezdjük" },
+      { id: "agent-1", turnId: "turn-1", kind: "agent", text: "Rendben, mehet." },
     ]);
   });
 
@@ -237,6 +244,129 @@ describe("OperAI thread-stream composition", () => {
         durationMs: 50,
       },
     }]);
+  });
+
+  it("groups snapshot history by turn and preserves final metadata", () => {
+    const snapshot: ThreadSnapshot = {
+      threadId: "thread-1",
+      cursor: "8",
+      activeTurnId: "turn-2",
+      name: null,
+      status: "active",
+      accessMode: "interactive",
+      raw: {
+        turns: [
+          {
+            id: "turn-1",
+            status: "failed",
+            error: { message: "A teszt hibával zárult" },
+            durationMs: 120,
+            items: [{ id: "agent-1", type: "agentMessage", text: "Első kör" }],
+          },
+          {
+            id: "turn-2",
+            status: "inProgress",
+            items: [{ id: "user-2", type: "userMessage", content: [{ text: "Folytasd" }] }],
+          },
+        ],
+      },
+    };
+
+    expect(projectThreadTurns(snapshot)).toEqual([
+      {
+        id: "turn-1",
+        status: "failed",
+        error: "A teszt hibával zárult",
+        durationMs: 120,
+        lines: [{ id: "agent-1", turnId: "turn-1", kind: "agent", text: "Első kör" }],
+      },
+      {
+        id: "turn-2",
+        status: "inProgress",
+        error: null,
+        durationMs: null,
+        lines: [{ id: "user-2", turnId: "turn-2", kind: "user", text: "Folytasd" }],
+      },
+    ]);
+  });
+
+  it("builds and completes a live turn without duplicating streamed items", () => {
+    const started = event("40", "turn/started", {
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+    });
+    const itemStarted = event("41", "item/started", {
+      item: { id: "agent-1", type: "agentMessage", text: "Készül" },
+    });
+    const itemCompleted = event("42", "item/completed", {
+      item: { id: "agent-1", type: "agentMessage", text: "Elkészült" },
+    });
+    const completed = event("43", "turn/completed", {
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        durationMs: 80,
+        items: [{ id: "agent-1", type: "agentMessage", text: "Elkészült" }],
+      },
+    });
+    const projected = [started, itemStarted, itemCompleted, completed]
+      .reduce(projectThreadTurnEvent, []);
+
+    expect(projected).toEqual([{
+      id: "turn-1",
+      status: "completed",
+      error: null,
+      durationMs: 80,
+      lines: [{ id: "agent-1", turnId: "turn-1", kind: "agent", text: "Elkészült" }],
+    }]);
+  });
+
+  it("filters activity categories and uses stable unread keys", () => {
+    const snapshot: ThreadSnapshot = {
+      threadId: "thread-1",
+      cursor: "60",
+      activeTurnId: null,
+      name: null,
+      status: "idle",
+      accessMode: "interactive",
+      raw: {
+        turns: [{
+          id: "turn-1",
+          status: "failed",
+          items: [
+            { id: "user-1", type: "userMessage", content: [{ text: "Teszt" }] },
+            { id: "command-1", type: "commandExecution", status: "completed", command: "npm test" },
+            { id: "file-1", type: "fileChange", status: "completed", changes: [] },
+            { id: "mcp-1", type: "mcpToolCall", status: "failed", server: "demo", tool: "read" },
+          ],
+        }],
+      },
+    };
+    const lines = projectThreadTurns(snapshot)[0]!.lines;
+    const messages = {
+      ...createThreadStreamFilters(),
+      commands: false,
+      files: false,
+      tools: false,
+      errors: false,
+    };
+    const errors = {
+      ...createThreadStreamFilters(),
+      messages: false,
+      commands: false,
+      files: false,
+      tools: false,
+    };
+
+    expect(filterThreadLines(lines, messages).map((line) => line.id)).toEqual(["user-1"]);
+    expect(filterThreadLines(lines, errors).map((line) => line.id)).toEqual(["mcp-1"]);
+    expect(eventUnreadKey(event("61", "item/completed", {
+      item: { id: "mcp-1", type: "mcpToolCall" },
+    }))).toBe("mcp-1");
+    expect(eventUnreadKey(event("62", "turn/completed", {
+      turn: { id: "turn-1", status: "completed" },
+    }))).toBe("turn:turn-1");
+    expect(eventUnreadKey(event("63", "gateway/snapshotChanged", {})))
+      .toBe("snapshot:63");
   });
 });
 

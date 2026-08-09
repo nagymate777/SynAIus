@@ -61,7 +61,12 @@ describe("Codex app-server client", () => {
       name: "Feladat",
       status: { type: "active" },
       turns: [
-        { id: "turn-1", status: "completed" },
+        {
+          id: "turn-1",
+          status: "failed",
+          error: { message: "Ellenőrzött hiba", privateDetail: "not-for-viewer" },
+          durationMs: 25,
+        },
         {
           id: "turn-2",
           status: "inProgress",
@@ -110,7 +115,11 @@ describe("Codex app-server client", () => {
     expect(JSON.stringify(snapshot.raw)).not.toContain("not-for-viewer");
     expect(JSON.stringify(snapshot.raw)).toContain("Készül");
     expect(snapshot.raw).toMatchObject({
-      turns: [{}, {
+      turns: [{
+        status: "failed",
+        error: { message: "Ellenőrzött hiba" },
+        durationMs: 25,
+      }, {
         items: [
           { type: "agentMessage" },
           { type: "commandExecution", aggregatedOutput: "ok", exitCode: 0 },

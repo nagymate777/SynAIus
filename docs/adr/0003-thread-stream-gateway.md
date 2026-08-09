@@ -29,6 +29,12 @@ A parancsvégrehajtási, fájlmódosítási és jogosultsági jóváhagyások, v
 
 A bridge csak az app-server által kért jogosultság pontos részhalmazát adhatja meg, és az ismeretlen szerverkéréseket automatikus engedélyezés helyett JSON-RPC hibával utasítja el. A titkos felhasználói válasz kizárólag az aktív HTTP-kérésben és az app-server válaszában szerepelhet; nem kerül eseménynaplóba vagy tartós tárba. Az MCP-elicitation jelenleg biztonságosan elutasítható vagy megszakítható; strukturált elfogadó űrlap külön későbbi bővítés.
 
+## Körönkénti megjelenítés
+
+A megjelenítő a snapshot `turns` sorrendjét és a natív `turn/started`, item- és `turn/completed` eseményeket használva feladatkörönként csoportosítja a tartalmat. Az item-események maradnak az üzenetek és műveletek tartalmának hiteles forrásai; a kör eseményei csak az állapotot, a hibát és az időtartamot zárják le. A korábbi körök összecsukhatók, a futó és a legutóbbi kör alapértelmezetten nyitott.
+
+Az üzenet-, parancs-, fájl-, eszköz- és hibaszűrők kizárólag helyi megjelenítési beállítások. A stream tartós eseménynaplóját és a domainállapotot nem módosítják. Ha a felhasználó elgörget a legfrissebb eseménytől, a követés megáll, az új item- és köresemények stabil azonosítóval olvasatlanként számolódnak, majd a lista aljára visszatérve törlődnek.
+
 ## Következmények
 
 - A stream a böngésző vagy a bridge rövid kiesése után kurzorról folytatható.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { ContentInstance, ContentRendererDefinition, JsonObject } from "@synaius/content";
 import { createTranslator, type TranslationDictionary } from "@synaius/i18n";
 import type {
@@ -14,17 +14,55 @@ import type {
 } from "@synaius/protocol";
 import type { WorkspaceContentRenderContext } from "@synaius/workspace-ui";
 import {
-  projectThreadEvent,
-  projectThreadSnapshot,
+  createThreadStreamFilters,
+  eventUnreadKey,
+  filterThreadLines,
+  projectThreadTurnEvent,
+  projectThreadTurns,
   type ThreadActivity,
   type ThreadActivityStatus,
+  type ThreadStreamFilter,
+  type ThreadStreamFilterState,
   type ThreadStreamLine,
+  type ThreadTurnGroup,
 } from "./activity.ts";
 import { THREAD_STREAM_CONTENT_TYPE, THREAD_STREAM_RENDERER_VERSION } from "./index";
 import "./thread-stream.css";
 
-export { projectThreadEvent, projectThreadSnapshot } from "./activity.ts";
-export type { ThreadActivity, ThreadActivityStatus, ThreadStreamLine } from "./activity.ts";
+export {
+  createThreadStreamFilters,
+  eventUnreadKey,
+  filterThreadLines,
+  projectThreadEvent,
+  projectThreadSnapshot,
+  projectThreadTurnEvent,
+  projectThreadTurns,
+} from "./activity.ts";
+export type {
+  ThreadActivity,
+  ThreadActivityStatus,
+  ThreadStreamFilter,
+  ThreadStreamFilterState,
+  ThreadStreamLine,
+  ThreadTurnGroup,
+  ThreadTurnStatus,
+} from "./activity.ts";
+
+const THREAD_STREAM_FILTERS: ThreadStreamFilter[] = [
+  "messages",
+  "commands",
+  "files",
+  "tools",
+  "errors",
+];
+
+const THREAD_STREAM_FILTER_KEYS: Record<ThreadStreamFilter, string> = {
+  messages: "module.thread-stream.filter.messages",
+  commands: "module.thread-stream.filter.commands",
+  files: "module.thread-stream.filter.files",
+  tools: "module.thread-stream.filter.tools",
+  errors: "module.thread-stream.filter.errors",
+};
 
 export interface ThreadStreamRendererOptions {
   gateway: ThreadStreamGateway;
@@ -69,7 +107,12 @@ function ThreadStreamPanel({
   const [threadCursor, setThreadCursor] = useState<string | null>(null);
   const [threadListBusy, setThreadListBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
-  const [lines, setLines] = useState<ThreadStreamLine[]>([]);
+  const [turns, setTurns] = useState<ThreadTurnGroup[]>([]);
+  const [filters, setFilters] = useState<ThreadStreamFilterState>(createThreadStreamFilters);
+  const [unreadKeys, setUnreadKeys] = useState<Set<string>>(() => new Set());
+  const [following, setFollowing] = useState(true);
+  const logRef = useRef<HTMLDivElement>(null);
+  const followingRef = useRef(true);
   const [connectionKey, setConnectionKey] = useState("module.thread-stream.connection.connecting");
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -146,8 +189,11 @@ function ThreadStreamPanel({
     let cancelled = false;
     let detach: (() => Promise<void>) | null = null;
     setSnapshot(null);
-    setLines([]);
+    setTurns([]);
     setInteractions([]);
+    followingRef.current = true;
+    setFollowing(true);
+    setUnreadKeys(new Set());
     if (!configuredThreadId) {
       setConnectionKey("module.thread-stream.connection.notSelected");
       return () => undefined;
@@ -161,7 +207,7 @@ function ThreadStreamPanel({
       }
       detach = attachment.detach;
       setSnapshot(attachment.snapshot);
-      setLines(projectThreadSnapshot(attachment.snapshot));
+      setTurns(projectThreadTurns(attachment.snapshot));
       setInteractions(await gateway.listInteractions(configuredThreadId));
       if (cancelled) return;
       setConnectionKey(attachment.snapshot.accessMode === "observe"
@@ -173,12 +219,28 @@ function ThreadStreamPanel({
         if (event.method === "gateway/snapshotChanged") {
           const refreshed = await gateway.readThread(configuredThreadId);
           if (cancelled) break;
+          if (!followingRef.current) {
+            const key = eventUnreadKey(event);
+            if (key) {
+              setUnreadKeys((current) => current.has(key)
+                ? current
+                : new Set([...current, key]));
+            }
+          }
           setSnapshot(refreshed);
-          setLines(projectThreadSnapshot(refreshed));
+          setTurns(projectThreadTurns(refreshed));
           setConnectionKey("module.thread-stream.connection.observe");
           continue;
         }
-        setLines((current) => projectThreadEvent(current, event));
+        if (!followingRef.current) {
+          const key = eventUnreadKey(event);
+          if (key) {
+            setUnreadKeys((current) => current.has(key)
+              ? current
+              : new Set([...current, key]));
+          }
+        }
+        setTurns((current) => projectThreadTurnEvent(current, event));
         setSnapshot((current) => updateSnapshotStatus(current, event));
         if (event.method === "gateway/disconnected"
           || event.method === "gateway/reconnectScheduled") {
@@ -200,10 +262,51 @@ function ThreadStreamPanel({
     };
   }, [configuredThreadId, gateway]);
 
+  useEffect(() => {
+    if (newThreadOpen || !followingRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const log = logRef.current;
+      if (log) log.scrollTop = log.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [filters, interactions, newThreadOpen, turns]);
+
   const selectedLabel = useMemo(() => {
     const selected = threads.find((thread) => thread.threadId === configuredThreadId);
     return selected ? threadLabel(selected) : configuredThreadId;
   }, [configuredThreadId, threads]);
+
+  const visibleTurns = useMemo(() => turns.flatMap((turn, turnIndex) => {
+    const visibleLines = filterThreadLines(turn.lines, filters);
+    const visibleWithoutLines = turn.status === "inProgress"
+      || (turn.status === "failed" && filters.errors);
+    return visibleLines.length || visibleWithoutLines ? [{ turn, turnIndex, visibleLines }] : [];
+  }), [filters, turns]);
+
+  function toggleFilter(filter: ThreadStreamFilter) {
+    setFilters((current) => ({ ...current, [filter]: !current[filter] }));
+  }
+
+  function showAllFilters() {
+    setFilters(createThreadStreamFilters());
+  }
+
+  function handleLogScroll() {
+    const log = logRef.current;
+    if (!log) return;
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight <= 32;
+    followingRef.current = atBottom;
+    setFollowing(atBottom);
+    if (atBottom) setUnreadKeys((current) => current.size ? new Set() : current);
+  }
+
+  function jumpToLatest() {
+    followingRef.current = true;
+    setFollowing(true);
+    setUnreadKeys(new Set());
+    const log = logRef.current;
+    if (log) log.scrollTo({ top: log.scrollHeight, behavior: "smooth" });
+  }
 
   function selectThread(threadId: string) {
     setNewThreadOpen(false);
@@ -273,7 +376,7 @@ function ThreadStreamPanel({
       setInitialMessage("");
       setWorkingDirectory("");
       setSnapshot(created);
-      setLines(projectThreadSnapshot(created));
+      setTurns(projectThreadTurns(created));
     } catch (error) {
       console.error("thread-stream.create.failed", error);
       setErrorKey("module.thread-stream.error.create");
@@ -376,6 +479,37 @@ function ThreadStreamPanel({
         </button>
       </div>
       <div className="thread-stream-title">{selectedLabel}</div>
+      {!newThreadOpen && configuredThreadId && (
+        <div className="thread-stream-controls">
+          <div
+            aria-label={t("module.thread-stream.filter.label")}
+            className="thread-stream-filters"
+            role="group"
+          >
+            {THREAD_STREAM_FILTERS.map((filter) => (
+              <button
+                aria-pressed={filters[filter]}
+                data-active={filters[filter]}
+                key={filter}
+                onClick={() => toggleFilter(filter)}
+                type="button"
+              >
+                {t(THREAD_STREAM_FILTER_KEYS[filter])}
+              </button>
+            ))}
+            <button onClick={showAllFilters} type="button">
+              {t("module.thread-stream.filter.all")}
+            </button>
+          </div>
+          {(!following || unreadKeys.size > 0) && (
+            <button className="thread-stream-latest" onClick={jumpToLatest} type="button">
+              {unreadKeys.size > 0
+                ? t("module.thread-stream.latest.unread", { count: unreadKeys.size })
+                : t("module.thread-stream.latest")}
+            </button>
+          )}
+        </div>
+      )}
       {newThreadOpen ? (
         <form className="thread-stream-new" onSubmit={createThread}>
           <div className="thread-stream-new-title">{t("module.thread-stream.new.title")}</div>
@@ -433,7 +567,12 @@ function ThreadStreamPanel({
           </div>
         </form>
       ) : (
-        <div className="thread-stream-log" aria-live="polite">
+        <div
+          className="thread-stream-log"
+          aria-live="polite"
+          onScroll={handleLogScroll}
+          ref={logRef}
+        >
           {interactions.length > 0 && (
             <div className="thread-stream-interactions">
               {interactions.map((interaction) => (
@@ -450,16 +589,25 @@ function ThreadStreamPanel({
           {!configuredThreadId && (
             <p className="thread-stream-empty">{t("module.thread-stream.thread.choose")}</p>
           )}
-          {configuredThreadId && lines.length === 0 && interactions.length === 0 && !errorKey && (
+          {configuredThreadId && turns.length === 0 && interactions.length === 0 && !errorKey && (
             <p className="thread-stream-empty">{t("module.thread-stream.thread.waiting")}</p>
           )}
-          {lines.map((line) => line.kind === "activity"
-            ? <ThreadActivityCard activity={line.activity} key={line.id} t={t} />
-            : (
-                <article className="thread-stream-line" data-kind={line.kind} key={line.id}>
-                  {line.text}
-                </article>
-              ))}
+          {configuredThreadId && turns.length > 0 && visibleTurns.length === 0 && (
+            <p className="thread-stream-empty">{t("module.thread-stream.filter.empty")}</p>
+          )}
+          {visibleTurns.map(({ turn, turnIndex, visibleLines }) => (
+            <ThreadTurnCard
+              hasUnread={unreadKeys.has(`turn:${turn.id}`) || turn.lines.some(
+                (line) => unreadKeys.has(line.id),
+              )}
+              isLatest={turnIndex === turns.length - 1}
+              key={turn.id}
+              number={turnIndex + 1}
+              t={t}
+              turn={turn}
+              visibleLines={visibleLines}
+            />
+          ))}
         </div>
       )}
       <div className="thread-stream-error" role="alert">{errorKey ? t(errorKey) : ""}</div>
@@ -482,6 +630,93 @@ function ThreadStreamPanel({
       </form>
     </section>
   );
+}
+
+function ThreadTurnCard({
+  turn,
+  visibleLines,
+  number,
+  isLatest,
+  hasUnread,
+  t,
+}: {
+  turn: ThreadTurnGroup;
+  visibleLines: ThreadStreamLine[];
+  number: number;
+  isLatest: boolean;
+  hasUnread: boolean;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  const [open, setOpen] = useState(turn.status === "inProgress" || isLatest);
+  useEffect(() => {
+    if (turn.status === "inProgress") setOpen(true);
+  }, [turn.status]);
+  const previewLine = turn.lines.find((line) => line.kind === "user")
+    ?? turn.lines.find((line) => line.kind === "agent");
+  const preview = previewLine?.text ?? "";
+  return (
+    <details
+      className="thread-stream-turn"
+      data-status={turn.status}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      open={open}
+    >
+      <summary>
+        <span aria-hidden="true" className="thread-stream-disclosure" />
+        <span className="thread-stream-turn-title">
+          {t("module.thread-stream.turn.title", { number })}
+        </span>
+        {preview && <span className="thread-stream-turn-preview">{preview}</span>}
+        <span className="thread-stream-turn-count">
+          {visibleLines.length === turn.lines.length
+            ? t("module.thread-stream.turn.entries", { count: turn.lines.length })
+            : t("module.thread-stream.turn.entries.visible", {
+                visible: visibleLines.length,
+                total: turn.lines.length,
+              })}
+        </span>
+        <span className="thread-stream-turn-status">{t(turnStatusKey(turn.status))}</span>
+        {hasUnread && (
+          <span
+            aria-label={t("module.thread-stream.turn.unread")}
+            className="thread-stream-turn-unread"
+            role="img"
+            title={t("module.thread-stream.turn.unread")}
+          />
+        )}
+      </summary>
+      {open && (
+        <div className="thread-stream-turn-body">
+          {turn.error && (
+            <div className="thread-stream-turn-error" role="alert">
+              <strong>{t("module.thread-stream.turn.error")}</strong>
+              <span>{turn.error}</span>
+            </div>
+          )}
+          {visibleLines.length === 0 && (
+            <p className="thread-stream-empty">{t("module.thread-stream.turn.filtered.empty")}</p>
+          )}
+          {visibleLines.map((line) => <ThreadStreamEntry key={line.id} line={line} t={t} />)}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function ThreadStreamEntry({
+  line,
+  t,
+}: {
+  line: ThreadStreamLine;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  return line.kind === "activity"
+    ? <ThreadActivityCard activity={line.activity} t={t} />
+    : (
+        <article className="thread-stream-line" data-kind={line.kind}>
+          {line.text}
+        </article>
+      );
 }
 
 function ThreadActivityCard({
@@ -703,6 +938,17 @@ function activityTitleKey(kind: ThreadActivity["kind"]) {
 
 function activityStatusKey(status: ThreadActivityStatus) {
   return `module.thread-stream.activity.status.${status}`;
+}
+
+function turnStatusKey(status: ThreadTurnGroup["status"]) {
+  const keys: Record<ThreadTurnGroup["status"], string> = {
+    inProgress: "module.thread-stream.activity.status.inProgress",
+    completed: "module.thread-stream.activity.status.completed",
+    failed: "module.thread-stream.activity.status.failed",
+    interrupted: "module.thread-stream.activity.status.interrupted",
+    unknown: "module.thread-stream.activity.status.unknown",
+  };
+  return keys[status];
 }
 
 function fileChangeKindKey(kind: "add" | "update" | "delete" | "unknown") {

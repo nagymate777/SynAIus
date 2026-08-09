@@ -12,6 +12,10 @@ export type ThreadActivityStatus =
   | "interrupted"
   | "unknown";
 
+export type ThreadTurnStatus = "inProgress" | "completed" | "failed" | "interrupted" | "unknown";
+export type ThreadStreamFilter = "messages" | "commands" | "files" | "tools" | "errors";
+export type ThreadStreamFilterState = Record<ThreadStreamFilter, boolean>;
+
 interface ThreadActivityBase {
   id: string;
   turnId: string | null;
@@ -63,18 +67,40 @@ export type ThreadActivity = ThreadActivityBase & (
 );
 
 export type ThreadStreamLine =
-  | { id: string; kind: "user"; text: string }
-  | { id: string; kind: "agent"; text: string }
+  | { id: string; turnId: string | null; kind: "user"; text: string }
+  | { id: string; turnId: string | null; kind: "agent"; text: string }
   | { id: string; kind: "activity"; activity: ThreadActivity };
 
+export interface ThreadTurnGroup {
+  id: string;
+  status: ThreadTurnStatus;
+  error: string | null;
+  durationMs: number | null;
+  lines: ThreadStreamLine[];
+}
+
+export function createThreadStreamFilters(): ThreadStreamFilterState {
+  return { messages: true, commands: true, files: true, tools: true, errors: true };
+}
+
 export function projectThreadSnapshot(snapshot: ThreadSnapshot): ThreadStreamLine[] {
+  return projectThreadTurns(snapshot).flatMap((turn) => turn.lines);
+}
+
+export function projectThreadTurns(snapshot: ThreadSnapshot): ThreadTurnGroup[] {
   const thread = asRecord(snapshot.raw);
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  return turns.flatMap((turn) => {
+  return turns.map((turn, index) => {
     const turnRecord = asRecord(turn);
-    const turnId = stringValue(turnRecord.id);
+    const turnId = stringValue(turnRecord.id) ?? `snapshot-turn:${index}`;
     const items = Array.isArray(turnRecord.items) ? turnRecord.items : [];
-    return items.flatMap((item) => lineFromItem(asRecord(item), turnId));
+    return {
+      id: turnId,
+      status: turnStatus(turnRecord.status),
+      error: turnError(turnRecord.error),
+      durationMs: numberValue(turnRecord.durationMs),
+      lines: items.flatMap((item) => lineFromItem(asRecord(item), turnId)),
+    };
   });
 }
 
@@ -89,7 +115,12 @@ export function projectThreadEvent(
     const existing = current.find((line): line is Extract<ThreadStreamLine, { kind: "agent" }> => (
       line.id === itemId && line.kind === "agent"
     ));
-    if (!existing) return [...current, { id: itemId, kind: "agent", text: delta }];
+    if (!existing) return [...current, {
+      id: itemId,
+      turnId: event.turnId,
+      kind: "agent",
+      text: delta,
+    }];
     return current.map((line) => line === existing
       ? { ...line, text: boundedText(`${line.text}${delta}`) }
       : line);
@@ -185,12 +216,76 @@ export function projectThreadEvent(
   return current;
 }
 
+export function projectThreadTurnEvent(
+  current: ThreadTurnGroup[],
+  event: DurableThreadEvent,
+): ThreadTurnGroup[] {
+  const params = asRecord(event.raw.params);
+  const turn = asRecord(params.turn);
+  const turnId = stringValue(turn.id) ?? event.turnId ?? stringValue(params.turnId);
+  if (!turnId) return current;
+  const existingIndex = current.findIndex((candidate) => candidate.id === turnId);
+  const existing = existingIndex >= 0 ? current[existingIndex] : null;
+  const projectedLines = projectThreadEvent(existing?.lines ?? [], event);
+  const next: ThreadTurnGroup = {
+    id: turnId,
+    status: event.method === "turn/started"
+      ? "inProgress"
+      : event.method === "turn/completed"
+        ? turnStatus(turn.status)
+        : existing?.status ?? "inProgress",
+    error: event.method === "turn/completed"
+      ? turnError(turn.error)
+      : existing?.error ?? null,
+    durationMs: event.method === "turn/completed"
+      ? numberValue(turn.durationMs)
+      : existing?.durationMs ?? null,
+    lines: projectedLines,
+  };
+  if (existingIndex < 0) return [...current, next];
+  return current.map((candidate, index) => index === existingIndex ? next : candidate);
+}
+
+export function filterThreadLines(
+  lines: ThreadStreamLine[],
+  filters: ThreadStreamFilterState,
+) {
+  return lines.filter((line) => {
+    const failed = line.kind === "activity" && line.activity.status === "failed";
+    if (filters.errors && failed) return true;
+    if (line.kind === "user" || line.kind === "agent") return filters.messages;
+    if (line.activity.kind === "command") return filters.commands;
+    if (line.activity.kind === "fileChange" || line.activity.kind === "turnDiff") {
+      return filters.files;
+    }
+    return filters.tools;
+  });
+}
+
+export function eventUnreadKey(event: DurableThreadEvent): string | null {
+  const params = asRecord(event.raw.params);
+  if (event.method === "gateway/snapshotChanged") return `snapshot:${event.cursor}`;
+  if (event.method === "turn/started" || event.method === "turn/completed") {
+    const turnId = stringValue(asRecord(params.turn).id) ?? event.turnId;
+    return turnId ? `turn:${turnId}` : null;
+  }
+  if (event.method === "turn/diff/updated") {
+    const turnId = event.turnId ?? stringValue(params.turnId);
+    return turnId ? `turn-diff:${turnId}` : null;
+  }
+  if (event.method.startsWith("item/")) {
+    const itemId = stringValue(asRecord(params.item).id) ?? stringValue(params.itemId);
+    return itemId;
+  }
+  return null;
+}
+
 function lineFromItem(item: Record<string, unknown>, turnId: string | null): ThreadStreamLine[] {
   const id = stringValue(item.id) ?? "";
   if (!id) return [];
   if (item.type === "agentMessage") {
     const text = stringValue(item.text) ?? "";
-    return text ? [{ id, kind: "agent", text: boundedText(text) }] : [];
+    return text ? [{ id, turnId, kind: "agent", text: boundedText(text) }] : [];
   }
   if (item.type === "userMessage") {
     const content = Array.isArray(item.content) ? item.content : [];
@@ -198,7 +293,7 @@ function lineFromItem(item: Record<string, unknown>, turnId: string | null): Thr
       .map((part) => stringValue(asRecord(part).text))
       .filter((part): part is string => Boolean(part))
       .join("\n");
-    return text ? [{ id, kind: "user", text: boundedText(text) }] : [];
+    return text ? [{ id, turnId, kind: "user", text: boundedText(text) }] : [];
   }
   if (item.type === "commandExecution") {
     return [activityLine({
@@ -335,6 +430,18 @@ function activityStatus(value: unknown): ThreadActivityStatus {
   return ["inProgress", "completed", "failed", "declined", "interrupted"].includes(status ?? "")
     ? status as ThreadActivityStatus
     : "unknown";
+}
+
+function turnStatus(value: unknown): ThreadTurnStatus {
+  const status = typeof value === "string" ? value : stringValue(asRecord(value).type);
+  return ["inProgress", "completed", "failed", "interrupted"].includes(status ?? "")
+    ? status as ThreadTurnStatus
+    : "unknown";
+}
+
+function turnError(value: unknown) {
+  const message = stringValue(asRecord(value).message);
+  return message === null ? null : boundedText(message, MAX_JSON_PREVIEW);
 }
 
 function boundedText(value: string, maximum = MAX_ACTIVITY_TEXT) {
