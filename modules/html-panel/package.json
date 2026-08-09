@@ -1,0 +1,17 @@
+{
+  "name": "@synaius/module-html-panel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./renderer": "./src/renderer.tsx"
+  },
+  "dependencies": {
+    "@synaius/application": "0.0.0",
+    "@synaius/content": "0.0.0",
+    "@synaius/i18n": "0.0.0",
+    "@synaius/workspace-ui": "0.0.0",
+    "react": "^19.0.0"
+  }
+}

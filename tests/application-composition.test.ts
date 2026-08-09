@@ -10,6 +10,7 @@ describe("application composition", () => {
     expect(operaiApplication.localeMessages[operaiApplication.titleKey]).toBe("SynAIus OperAI");
     expect(operaiApplication.modules.map((module) => module.id)).toEqual([
       "artifact-viewer",
+      "html-panel",
       "thread-stream",
     ]);
   });

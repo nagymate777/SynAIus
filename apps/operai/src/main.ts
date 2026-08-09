@@ -5,6 +5,7 @@ import {
 } from "@synaius/module-artifact-viewer";
 import { BrowserArtifactGateway } from "@synaius/module-artifact-viewer/client";
 import { createArtifactViewerRenderer } from "@synaius/module-artifact-viewer/renderer";
+import { createHtmlPanelRenderer } from "@synaius/module-html-panel/renderer";
 import { BrowserThreadStreamGateway } from "@synaius/module-thread-stream/client";
 import { createThreadStreamRenderer } from "@synaius/module-thread-stream/renderer";
 import { createTranslator } from "@synaius/i18n";
@@ -22,6 +23,7 @@ contentRegistry.register(createArtifactViewerRenderer({
   gateway: new BrowserArtifactGateway(),
   localeMessages: hu,
 }));
+contentRegistry.register(createHtmlPanelRenderer({ localeMessages: hu }));
 contentRegistry.register(createThreadStreamRenderer({
   gateway: new BrowserThreadStreamGateway(),
   localeMessages: hu,

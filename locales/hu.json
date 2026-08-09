@@ -1,4 +1,13 @@
 {
+  "module.html-panel.catalog.css.label": "A panel CSS-stílusa",
+  "module.html-panel.catalog.css.placeholder": "például: h1 { color: teal; }",
+  "module.html-panel.catalog.description": "Saját HTML- és CSS-tartalom elkülönített, JavaScript- és hálózatmentes megjelenítéssel.",
+  "module.html-panel.catalog.html.label": "A panel HTML-tartalma",
+  "module.html-panel.catalog.html.placeholder": "például: <h1>Cím</h1><p>Tartalom</p>",
+  "module.html-panel.defaultBoxName": "HTML panel",
+  "module.html-panel.empty": "A panel még nem tartalmaz HTML-t.",
+  "module.html-panel.frame.title": "Elkülönített HTML-panel",
+  "module.html-panel.title": "HTML–CSS panel",
   "module.artifact-viewer.change.add": "Új fájl",
   "module.artifact-viewer.change.delete": "Törölt fájl",
   "module.artifact-viewer.change.unknown": "Fájlváltozás",
