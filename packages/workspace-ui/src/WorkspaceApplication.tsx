@@ -79,6 +79,7 @@ type ContextMode =
   | "delete-layout"
   | "copy-layout"
   | "content-picker"
+  | "content-settings"
   | "snapshots"
   | "import";
 type ClipboardMode = "cut" | "clone";
@@ -441,7 +442,11 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     [visibleBoxes, visibleBoxIds],
   );
   const contextBox = context?.boxId ? workspace.boxes[context.boxId] : null;
-  const selectedContentDefinition = context?.contentType
+  const contextContent = contextBox?.contentId ? workspace.contents[contextBox.contentId] : null;
+  const contextContentDefinition = contextContent && contentRegistry
+    ? resolveCatalogDefinition(contentRegistry, contextContent.type, contextContent.rendererVersion)
+    : null;
+  const selectedContentDefinition = context?.mode === "content-picker" && context.contentType
     ? contentCatalog.find((definition) => definition.type === context.contentType) ?? null
     : null;
   const contextBoxHasChildren = contextBox
@@ -601,6 +606,78 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     } catch {
       setContext({ ...context, errorKey: "workspace.content.error.invalid" });
     }
+  }
+
+  function openContentSettings() {
+    if (!context || !contextContent || !contextContentDefinition?.catalog.fields.length) return;
+    setContext({
+      ...context,
+      mode: "content-settings",
+      contentType: contextContent.type,
+      contentValues: contentFieldValues(contextContentDefinition, contextContent.configuration),
+      errorKey: null,
+    });
+  }
+
+  function saveContentSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!context || !contentRegistry || !contextContent || !contextContentDefinition) return;
+    if (contextContentDefinition.catalog.fields.some(
+      (field) => field.required && !context.contentValues[field.key]?.trim(),
+    )) {
+      setContext({ ...context, errorKey: "workspace.content.error.required" });
+      return;
+    }
+
+    const configuration = structuredClone(contextContent.configuration) as JsonObject;
+    for (const field of contextContentDefinition.catalog.fields) {
+      configuration[field.key] = context.contentValues[field.key]?.trim() ?? "";
+    }
+    try {
+      const { revision: _revision, ...content } = contextContent;
+      contentRegistry.createInstance({ ...content, configuration });
+      send("content.configure", { contentId: contextContent.id, configuration });
+      setContext(null);
+    } catch {
+      setContext({ ...context, errorKey: "workspace.content.error.invalid" });
+    }
+  }
+
+  function renderContentFields(
+    definition: CatalogContentRendererDefinition<ReactNode, WorkspaceContentRenderContext>,
+  ) {
+    if (!context) return null;
+    return definition.catalog.fields.map((field) => (
+      <label key={field.key} htmlFor={`content-field-${field.key}`}>
+        {t(field.labelKey)}
+        {field.input === "textarea" ? (
+          <textarea
+            id={`content-field-${field.key}`}
+            rows={3}
+            required={field.required}
+            placeholder={field.placeholderKey ? t(field.placeholderKey) : undefined}
+            value={context.contentValues[field.key] ?? ""}
+            onChange={(event) => setContext({
+              ...context,
+              contentValues: { ...context.contentValues, [field.key]: event.target.value },
+              errorKey: null,
+            })}
+          />
+        ) : (
+          <input
+            id={`content-field-${field.key}`}
+            required={field.required}
+            placeholder={field.placeholderKey ? t(field.placeholderKey) : undefined}
+            value={context.contentValues[field.key] ?? ""}
+            onChange={(event) => setContext({
+              ...context,
+              contentValues: { ...context.contentValues, [field.key]: event.target.value },
+              errorKey: null,
+            })}
+          />
+        )}
+      </label>
+    ));
   }
 
   function openCanvasContext(event: ReactMouseEvent<HTMLElement>) {
@@ -1143,6 +1220,11 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
                         {t("workspace.action.editBoxLabel")}
                       </button>
                     )}
+                    {contextContentDefinition?.catalog.fields.length ? (
+                      <button role="menuitem" onClick={openContentSettings}>
+                        {t("workspace.action.editContent")}
+                      </button>
+                    ) : null}
                     <button
                       role="menuitem"
                       aria-pressed={contextBox.hiddenWhenLocked}
@@ -1216,37 +1298,7 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
                       errorKey: null,
                     })}
                   />
-                  {selectedContentDefinition.catalog.fields.map((field) => (
-                    <label key={field.key} htmlFor={`content-field-${field.key}`}>
-                      {t(field.labelKey)}
-                      {field.input === "textarea" ? (
-                        <textarea
-                          id={`content-field-${field.key}`}
-                          rows={3}
-                          required={field.required}
-                          placeholder={field.placeholderKey ? t(field.placeholderKey) : undefined}
-                          value={context.contentValues[field.key] ?? ""}
-                          onChange={(event) => setContext({
-                            ...context,
-                            contentValues: { ...context.contentValues, [field.key]: event.target.value },
-                            errorKey: null,
-                          })}
-                        />
-                      ) : (
-                        <input
-                          id={`content-field-${field.key}`}
-                          required={field.required}
-                          placeholder={field.placeholderKey ? t(field.placeholderKey) : undefined}
-                          value={context.contentValues[field.key] ?? ""}
-                          onChange={(event) => setContext({
-                            ...context,
-                            contentValues: { ...context.contentValues, [field.key]: event.target.value },
-                            errorKey: null,
-                          })}
-                        />
-                      )}
-                    </label>
-                  ))}
+                  {renderContentFields(selectedContentDefinition)}
                   {context.errorKey && <p className="context-error">{t(context.errorKey)}</p>}
                   <div className="context-actions">
                     <button type="submit">{t("workspace.content.create")}</button>
@@ -1284,6 +1336,20 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
                   </button>
                 </div>
               )
+            )}
+
+            {context.mode === "content-settings" && contextContent && contextContentDefinition && (
+              <form onSubmit={saveContentSettings}>
+                <p>{t("workspace.content.edit", { type: t(contextContentDefinition.titleKey) })}</p>
+                {renderContentFields(contextContentDefinition)}
+                {context.errorKey && <p className="context-error">{t(context.errorKey)}</p>}
+                <div className="context-actions">
+                  <button type="submit">{t("workspace.action.save")}</button>
+                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>
+                    {t("workspace.action.cancel")}
+                  </button>
+                </div>
+              </form>
             )}
 
             {context.mode === "rename" && contextBox && (
@@ -1530,6 +1596,31 @@ function nextAvailableLiteralName(
     candidate = t("workspace.content.boxNameNumbered", { name: defaultName, count });
   }
   return candidate;
+}
+
+function resolveCatalogDefinition(
+  registry: ContentRegistry<ReactNode, WorkspaceContentRenderContext>,
+  type: string,
+  version: number,
+) {
+  try {
+    const definition = registry.resolve(type, version);
+    return definition.catalog
+      ? definition as CatalogContentRendererDefinition<ReactNode, WorkspaceContentRenderContext>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function contentFieldValues(
+  definition: CatalogContentRendererDefinition<ReactNode, WorkspaceContentRenderContext>,
+  configuration: JsonObject,
+) {
+  return Object.fromEntries(definition.catalog.fields.map((field) => [
+    field.key,
+    typeof configuration[field.key] === "string" ? configuration[field.key] : "",
+  ])) as Record<string, string>;
 }
 
 function menuPosition(clientX: number, clientY: number) {

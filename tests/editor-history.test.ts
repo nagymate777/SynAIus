@@ -73,6 +73,49 @@ describe("editor history", () => {
     expect(undoEditorState(editor)).toBe(editor);
   });
 
+  it("undoes and redoes content configuration changes", () => {
+    const workspace = createWorkspace({
+      workspaceId: "workspace",
+      initialViewId: "main",
+      initialViewName: "Alapnézet",
+    });
+    let editor = createEditorState(workspace);
+    editor = commitEditorState(editor, (current) => applyCommand(current, "content.box.create", {
+      content: {
+        id: "content:artifact",
+        type: "module.artifact-viewer.file",
+        rendererVersion: 1,
+        configuration: { provider: "thread-file", threadId: "thread-1", path: "first.txt" },
+        requiredPermissions: ["artifact.thread-file.read"],
+        sourceNodeId: null,
+      },
+      boxId: "box:artifact",
+      viewId: "main",
+      parentId: null,
+      name: "Fájlmegjelenítő",
+      rect: { column: 0, row: 4, width: 14, height: 12 },
+    }));
+    editor = commitEditorState(editor, (current) => applyCommand(current, "content.configure", {
+      contentId: "content:artifact",
+      configuration: { provider: "thread-file", threadId: "thread-2", path: "second.txt" },
+    }));
+
+    expect(editor.workspace.contents["content:artifact"]?.configuration).toMatchObject({
+      threadId: "thread-2",
+      path: "second.txt",
+    });
+    editor = undoEditorState(editor);
+    expect(editor.workspace.contents["content:artifact"]?.configuration).toMatchObject({
+      threadId: "thread-1",
+      path: "first.txt",
+    });
+    editor = redoEditorState(editor);
+    expect(editor.workspace.contents["content:artifact"]?.configuration).toMatchObject({
+      threadId: "thread-2",
+      path: "second.txt",
+    });
+  });
+
   it("falls back to a valid layout when undo removes the active custom layout", () => {
     const workspace = createWorkspace({
       workspaceId: "workspace",
