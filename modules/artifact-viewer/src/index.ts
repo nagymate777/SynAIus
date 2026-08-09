@@ -65,6 +65,7 @@ export function openThreadFileArtifact(
       width: 14,
       height: 12,
     },
+    grantedPermissions: [...artifactViewerModuleManifest.permissions],
   });
   return { action: "created" as const, boxId, contentId };
 }

@@ -52,6 +52,7 @@ export function createHtmlPanelRenderer(
       defaultHeight: 10,
       initialConfiguration: { html: "", css: "" },
       requiredPermissions: htmlPanelModuleManifest.permissions,
+      permissions: [],
       fields: [
         {
           key: "html",

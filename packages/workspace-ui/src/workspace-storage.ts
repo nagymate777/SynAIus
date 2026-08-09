@@ -5,6 +5,7 @@ import {
   migrateWorkspaceV4,
   migrateWorkspaceV5,
   migrateWorkspaceV6,
+  migrateWorkspaceV7,
   type BuiltInDeviceKind,
   type BoxNode,
   type CloneNameTemplates,
@@ -22,12 +23,13 @@ import {
   type LegacyWorkspaceStateV4,
   type LegacyWorkspaceStateV5,
   type LegacyWorkspaceStateV6,
+  type LegacyWorkspaceStateV7,
   type WorkspaceState,
   type WorkspaceView,
 } from "@synaius/domain";
 import { isJsonObject, type ContentInstance } from "@synaius/content";
 
-export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v7";
+export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v8";
 const BUILT_IN_DEVICE_KINDS: BuiltInDeviceKind[] = ["desktop", "tablet", "mobile"];
 
 export function loadWorkspace(
@@ -38,8 +40,11 @@ export function loadWorkspace(
   storageNamespace = "synaius",
 ): WorkspaceState {
   try {
-    const current: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 7));
+    const current: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 8));
     if (isWorkspaceState(current)) return current;
+
+    const versionSeven: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 7));
+    if (isLegacyWorkspaceStateV7(versionSeven)) return migrateWorkspaceV7(versionSeven);
 
     const versionSix: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 6));
     if (isLegacyWorkspaceStateV6(versionSix)) return migrateWorkspaceV6(versionSix);
@@ -75,6 +80,7 @@ export function upgradeWorkspaceState(
   cloneNameTemplates: CloneNameTemplates,
 ): WorkspaceState | null {
   if (isWorkspaceState(value)) return value;
+  if (isLegacyWorkspaceStateV7(value)) return migrateWorkspaceV7(value);
   if (isLegacyWorkspaceStateV6(value)) return migrateWorkspaceV6(value);
   if (isLegacyWorkspaceStateV5(value)) return migrateWorkspaceV5(value);
   if (isLegacyWorkspaceStateV4(value)) return migrateWorkspaceV4(value, cloneNameTemplates);
@@ -90,7 +96,7 @@ export function upgradeWorkspaceState(
 
 export function saveWorkspace(workspace: WorkspaceState, storageNamespace = "synaius") {
   try {
-    localStorage.setItem(workspaceStorageKey(storageNamespace, 7), JSON.stringify(workspace));
+    localStorage.setItem(workspaceStorageKey(storageNamespace, 8), JSON.stringify(workspace));
   } catch {
     return false;
   }
@@ -98,7 +104,7 @@ export function saveWorkspace(workspace: WorkspaceState, storageNamespace = "syn
 }
 
 export function isWorkspaceState(value: unknown): value is WorkspaceState {
-  if (!isWorkspaceBase(value) || value.schemaVersion !== 7 || typeof value.activeLayout !== "string") return false;
+  if (!isWorkspaceBase(value) || value.schemaVersion !== 8 || typeof value.activeLayout !== "string") return false;
   if (!isDeviceLayouts(value.layouts) || !isLayoutOrder(value.layoutOrder, value.layouts)) return false;
   const layouts = value.layouts;
   if (!BUILT_IN_DEVICE_KINDS.every((layoutId) => layouts[layoutId]?.builtIn)
@@ -127,7 +133,13 @@ export function isWorkspaceState(value: unknown): value is WorkspaceState {
         && typeof box.labelKey === "string"
         && typeof localeMessages[box.labelKey] === "string")
     && (box.contentId === null || Object.prototype.hasOwnProperty.call(candidate.contents, box.contentId)))
-    && layoutsHaveValidControls(candidate);
+    && layoutsHaveValidControls(candidate)
+    && permissionGrantsAreValid(candidate);
+}
+
+export function isLegacyWorkspaceStateV7(value: unknown): value is LegacyWorkspaceStateV7 {
+  if (!isRecord(value) || value.schemaVersion !== 7 || Object.hasOwn(value, "permissionGrants")) return false;
+  return isWorkspaceState({ ...value, schemaVersion: 8, permissionGrants: {} });
 }
 
 export function isLegacyWorkspaceStateV6(value: unknown): value is LegacyWorkspaceStateV6 {
@@ -472,6 +484,21 @@ function layoutsHaveValidControls(workspace: WorkspaceState) {
   });
 }
 
+function permissionGrantsAreValid(workspace: WorkspaceState) {
+  const grants: unknown = workspace.permissionGrants;
+  if (!isRecord(grants)) return false;
+  return Object.entries(grants).every(([boxId, value]) => {
+    const box = workspace.boxes[boxId];
+    const content = box?.contentId ? workspace.contents[box.contentId] : null;
+    return Boolean(content)
+      && Array.isArray(value)
+      && value.length > 0
+      && new Set(value).size === value.length
+      && value.every((permission) => typeof permission === "string"
+        && content!.requiredPermissions.includes(permission));
+  });
+}
+
 function isBoxStyle(value: unknown) {
   return isRecord(value)
     && isRecord(value.declarations)
@@ -497,6 +524,7 @@ function isContentInstance(value: unknown): value is ContentInstance {
     && (value.revision as number) >= 0
     && isJsonObject(value.configuration)
     && Array.isArray(value.requiredPermissions)
-    && value.requiredPermissions.every((permission) => typeof permission === "string" && permission.length > 0)
+    && new Set(value.requiredPermissions).size === value.requiredPermissions.length
+    && value.requiredPermissions.every((permission) => typeof permission === "string" && permission.trim().length > 0)
     && (value.sourceNodeId === null || (typeof value.sourceNodeId === "string" && value.sourceNodeId.length > 0));
 }

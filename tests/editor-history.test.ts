@@ -116,6 +116,40 @@ describe("editor history", () => {
     });
   });
 
+  it("undoes and redoes per-box permission grants", () => {
+    const workspace = createWorkspace({
+      workspaceId: "workspace",
+      initialViewId: "main",
+      initialViewName: "Alapnézet",
+    });
+    let editor = createEditorState(workspace);
+    editor = commitEditorState(editor, (current) => applyCommand(current, "content.box.create", {
+      content: {
+        id: "content:artifact",
+        type: "module.artifact-viewer.file",
+        rendererVersion: 1,
+        configuration: { provider: "thread-file", threadId: "thread-1", path: "first.txt" },
+        requiredPermissions: ["artifact.thread-file.read"],
+        sourceNodeId: null,
+      },
+      boxId: "box:artifact",
+      viewId: "main",
+      parentId: null,
+      name: "Fájlmegjelenítő",
+      rect: { column: 0, row: 4, width: 14, height: 12 },
+    }));
+    editor = commitEditorState(editor, (current) => applyCommand(current, "box.permissions.set", {
+      boxId: "box:artifact",
+      permissions: ["artifact.thread-file.read"],
+    }));
+
+    expect(editor.workspace.permissionGrants["box:artifact"]).toEqual(["artifact.thread-file.read"]);
+    editor = undoEditorState(editor);
+    expect(editor.workspace.permissionGrants["box:artifact"]).toBeUndefined();
+    editor = redoEditorState(editor);
+    expect(editor.workspace.permissionGrants["box:artifact"]).toEqual(["artifact.thread-file.read"]);
+  });
+
   it("falls back to a valid layout when undo removes the active custom layout", () => {
     const workspace = createWorkspace({
       workspaceId: "workspace",

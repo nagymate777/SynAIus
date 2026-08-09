@@ -20,6 +20,12 @@ export interface ContentCatalogFieldDefinition {
   required: boolean;
 }
 
+export interface ContentPermissionDefinition {
+  id: string;
+  titleKey: string;
+  descriptionKey: string;
+}
+
 export interface ContentCatalogDefinition {
   descriptionKey: string;
   defaultBoxNameKey: string;
@@ -27,6 +33,7 @@ export interface ContentCatalogDefinition {
   defaultHeight: number;
   initialConfiguration: JsonObject;
   requiredPermissions: readonly string[];
+  permissions: readonly ContentPermissionDefinition[];
   fields: readonly ContentCatalogFieldDefinition[];
 }
 
@@ -114,7 +121,11 @@ export function createContentRegistry<TOutput = unknown, TContext = unknown>(): 
         || instance.requiredPermissions.some((permission) => typeof permission !== "string" || !permission.trim())) return false;
       if (instance.sourceNodeId !== null && !instance.sourceNodeId.trim()) return false;
       try {
-        return this.resolve(instance.type, instance.rendererVersion).validateConfiguration(instance.configuration);
+        const renderer = this.resolve(instance.type, instance.rendererVersion);
+        if (renderer.catalog && !sameStringSet(instance.requiredPermissions, renderer.catalog.requiredPermissions)) {
+          return false;
+        }
+        return renderer.validateConfiguration(instance.configuration);
       } catch {
         return false;
       }
@@ -156,6 +167,22 @@ function normalizeCatalog(catalog: ContentCatalogDefinition): ContentCatalogDefi
     || catalog.requiredPermissions.some((permission) => typeof permission !== "string" || !permission.trim())) {
     throw new ContentContractError("content.catalog.permissions.invalid");
   }
+  if (!Array.isArray(catalog.permissions)
+    || catalog.permissions.length !== catalog.requiredPermissions.length) {
+    throw new ContentContractError("content.catalog.permissionDefinitions.invalid");
+  }
+  const permissionIds = new Set<string>();
+  const permissions = catalog.permissions.map((permission) => {
+    assertIdentifier(permission.id, "content.catalog.permission.id.invalid");
+    if (permissionIds.has(permission.id)
+      || !catalog.requiredPermissions.includes(permission.id)
+      || !permission.titleKey.trim()
+      || !permission.descriptionKey.trim()) {
+      throw new ContentContractError("content.catalog.permissionDefinitions.invalid");
+    }
+    permissionIds.add(permission.id);
+    return Object.freeze({ ...permission });
+  });
   const fieldKeys = new Set<string>();
   const fields = catalog.fields.map((field) => {
     if (!/^[a-z][a-zA-Z0-9]*$/.test(field.key)) {
@@ -178,6 +205,7 @@ function normalizeCatalog(catalog: ContentCatalogDefinition): ContentCatalogDefi
     ...catalog,
     initialConfiguration: deepFreeze(structuredClone(catalog.initialConfiguration)),
     requiredPermissions: Object.freeze([...catalog.requiredPermissions]),
+    permissions: Object.freeze(permissions),
     fields: Object.freeze(fields),
   });
 }
@@ -188,4 +216,10 @@ function deepFreeze<T extends JsonValue>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length
+    && new Set(left).size === left.length
+    && left.every((value) => right.includes(value));
 }

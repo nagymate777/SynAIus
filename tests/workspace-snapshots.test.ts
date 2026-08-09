@@ -40,7 +40,7 @@ describe("workspace snapshots", () => {
         return [box.id, { ...legacyBox, archived: false }];
       })),
     };
-    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop", cloneNameTemplates)?.schemaVersion).toBe(7);
+    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop", cloneNameTemplates)?.schemaVersion).toBe(8);
     expect(parseWorkspaceExport("not-json", deviceNames, "desktop", cloneNameTemplates)).toBeNull();
     expect(parseWorkspaceExport(JSON.stringify({ schemaVersion: 2 }), deviceNames, "desktop", cloneNameTemplates)).toBeNull();
   });

@@ -11,6 +11,7 @@ import type {
 import type { SynAIusApplicationManifest } from "@synaius/application";
 import type {
   CatalogContentRendererDefinition,
+  ContentInstance,
   ContentRegistry,
   JsonObject,
 } from "@synaius/content";
@@ -80,6 +81,7 @@ type ContextMode =
   | "copy-layout"
   | "content-picker"
   | "content-settings"
+  | "permissions"
   | "snapshots"
   | "import";
 type ClipboardMode = "cut" | "clone";
@@ -449,6 +451,8 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
   const selectedContentDefinition = context?.mode === "content-picker" && context.contentType
     ? contentCatalog.find((definition) => definition.type === context.contentType) ?? null
     : null;
+  const contextRequiredPermissions = requiredPermissionsFor(contextContentDefinition, contextContent);
+  const contextGrantedPermissions = contextBox ? workspace.permissionGrants[contextBox.id] ?? [] : [];
   const contextBoxHasChildren = contextBox
     ? Object.values(workspace.boxes).some((box) => box.parentId === contextBox.id)
     : false;
@@ -641,6 +645,31 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     } catch {
       setContext({ ...context, errorKey: "workspace.content.error.invalid" });
     }
+  }
+
+  function openPermissionManager() {
+    if (!context || !contextBox || contextRequiredPermissions.length === 0) return;
+    setContext({ ...context, mode: "permissions", errorKey: null });
+  }
+
+  function openPermissionManagerForBox(event: ReactMouseEvent<HTMLButtonElement>, box: BoxNode) {
+    event.stopPropagation();
+    setContext({
+      boxId: box.id,
+      point: { column: 0, row: 0 },
+      ...menuPosition(event.clientX, event.clientY),
+      mode: "permissions",
+      draftName: box.name,
+      draftLabel: localizedBoxLabel(workspace, box),
+      sourceLayoutId: workspace.activeLayout,
+      contentType: null,
+      contentValues: {},
+      errorKey: null,
+    });
+  }
+
+  function setBoxPermissions(boxId: string, permissions: string[]) {
+    send("box.permissions.set", { boxId, permissions });
   }
 
   function renderContentFields(
@@ -967,6 +996,14 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     const children = visibleBoxes.filter((candidate) => candidate.parentId === box.id);
     const renderedRect = drag?.boxId === box.id ? drag.previewRect : box.layoutRects[workspace.activeLayout];
     const label = localizedBoxLabel(workspace, box);
+    const content = box.contentId ? workspace.contents[box.contentId] : null;
+    const contentDefinition = content && contentRegistry
+      ? resolveCatalogDefinition(contentRegistry, content.type, content.rendererVersion)
+      : null;
+    const requiredPermissions = requiredPermissionsFor(contentDefinition, content);
+    const grantedPermissions = workspace.permissionGrants[box.id] ?? [];
+    const missingPermissions = requiredPermissions.filter((permission) => !grantedPermissions.includes(permission));
+    const validContent = content && contentRegistry ? contentRegistry.validate(content) : false;
     const geometry: CSSProperties = box.parentId
       ? {
           gridColumn: `${renderedRect.column + 1} / span ${renderedRect.width}`,
@@ -1020,9 +1057,37 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
             <span className="system-box-label">{label}</span>
           </button>
         )}
-        {box.role.type === "content" && box.contentId && contentRegistry && (
-          <div className="box-content" data-content-id={box.contentId}>
-            {contentRegistry.render(workspace.contents[box.contentId], {
+        {box.role.type === "content" && content && contentRegistry && (
+          <div className="box-content" data-content-id={content.id}>
+            {!validContent ? (
+              <div className="content-permission-gate" role="alert">
+                <strong>{t("workspace.content.invalid.title")}</strong>
+                <p>{t("workspace.content.invalid.description")}</p>
+              </div>
+            ) : missingPermissions.length > 0 ? (
+              <div
+                className="content-permission-gate"
+                data-missing-permissions={missingPermissions.length}
+                role="alert"
+              >
+                <strong>{t("workspace.permission.blocked.title")}</strong>
+                <p>{t("workspace.permission.blocked.description", { count: missingPermissions.length })}</p>
+                <ul>
+                  {missingPermissions.map((permission) => {
+                    const definition = contentDefinition?.catalog.permissions
+                      .find((candidate) => candidate.id === permission);
+                    return (
+                      <li key={permission}>
+                        {t(definition?.titleKey ?? "workspace.permission.unknown.title", { permission })}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <button type="button" onClick={(event) => openPermissionManagerForBox(event, box)}>
+                  {t("workspace.permission.manage")}
+                </button>
+              </div>
+            ) : contentRegistry.render(content, {
               box,
               workspace,
               execute: send,
@@ -1225,6 +1290,14 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
                         {t("workspace.action.editContent")}
                       </button>
                     ) : null}
+                    {contextRequiredPermissions.length > 0 && (
+                      <button role="menuitem" onClick={openPermissionManager}>
+                        {t("workspace.permission.manageWithCount", {
+                          granted: contextGrantedPermissions.length,
+                          total: contextRequiredPermissions.length,
+                        })}
+                      </button>
+                    )}
                     <button
                       role="menuitem"
                       aria-pressed={contextBox.hiddenWhenLocked}
@@ -1350,6 +1423,57 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
                   </button>
                 </div>
               </form>
+            )}
+
+            {context.mode === "permissions" && contextBox && contextRequiredPermissions.length > 0 && (
+              <div>
+                <p>{t("workspace.permission.title", { name: contextBox.name })}</p>
+                <div className="permission-list">
+                  {contextRequiredPermissions.map((permission) => {
+                    const definition = contextContentDefinition?.catalog.permissions
+                      .find((candidate) => candidate.id === permission);
+                    const granted = contextGrantedPermissions.includes(permission);
+                    return (
+                      <label className="permission-row" key={permission}>
+                        <input
+                          type="checkbox"
+                          checked={granted}
+                          onChange={() => setBoxPermissions(
+                            contextBox.id,
+                            granted
+                              ? contextGrantedPermissions.filter((candidate) => candidate !== permission)
+                              : [...contextGrantedPermissions, permission],
+                          )}
+                        />
+                        <span>
+                          <strong>{t(definition?.titleKey ?? "workspace.permission.unknown.title", { permission })}</strong>
+                          <small>{t(
+                            definition?.descriptionKey ?? "workspace.permission.unknown.description",
+                            { permission },
+                          )}</small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="context-stack permission-actions">
+                  <button
+                    disabled={contextGrantedPermissions.length === contextRequiredPermissions.length}
+                    onClick={() => setBoxPermissions(contextBox.id, [...contextRequiredPermissions])}
+                  >
+                    {t("workspace.permission.grantAll")}
+                  </button>
+                  <button
+                    disabled={contextGrantedPermissions.length === 0}
+                    onClick={() => setBoxPermissions(contextBox.id, [])}
+                  >
+                    {t("workspace.permission.revokeAll")}
+                  </button>
+                  <button onClick={() => setContext({ ...context, mode: "actions" })}>
+                    {t("workspace.action.back")}
+                  </button>
+                </div>
+              </div>
             )}
 
             {context.mode === "rename" && contextBox && (
@@ -1621,6 +1745,13 @@ function contentFieldValues(
     field.key,
     typeof configuration[field.key] === "string" ? configuration[field.key] : "",
   ])) as Record<string, string>;
+}
+
+function requiredPermissionsFor(
+  definition: CatalogContentRendererDefinition<ReactNode, WorkspaceContentRenderContext> | null,
+  content: ContentInstance | null,
+) {
+  return definition?.catalog.requiredPermissions ?? content?.requiredPermissions ?? [];
 }
 
 function menuPosition(clientX: number, clientY: number) {

@@ -207,6 +207,7 @@ describe("artifact viewer", () => {
         type: ARTIFACT_VIEWER_CONTENT_TYPE,
         configuration: { provider: "thread-file", threadId: "thread-1", path: "src/app.ts" },
       },
+      grantedPermissions: ["artifact.thread-file.read"],
     });
     expect(focusedBoxes).toEqual([]);
   });

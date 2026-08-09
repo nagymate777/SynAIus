@@ -69,6 +69,7 @@ describe("content renderer contract", () => {
         defaultHeight: 4,
         initialConfiguration: { text: "" },
         requiredPermissions: [],
+        permissions: [],
         fields: [{
           key: "text",
           labelKey: "core.content.note.text",
@@ -87,6 +88,11 @@ describe("content renderer contract", () => {
         defaultHeight: 5,
         initialConfiguration: { text: "" },
         requiredPermissions: ["note.read"],
+        permissions: [{
+          id: "note.read",
+          titleKey: "core.content.note.permission.read.title",
+          descriptionKey: "core.content.note.permission.read.description",
+        }],
         fields: [{
           key: "text",
           labelKey: "core.content.note.text",
@@ -101,7 +107,27 @@ describe("content renderer contract", () => {
     expect(catalog[0]).toMatchObject({ version: 2, catalog: { defaultWidth: 8 } });
     expect(Object.isFrozen(catalog[0]?.catalog)).toBe(true);
     expect(Object.isFrozen(catalog[0]?.catalog.initialConfiguration)).toBe(true);
+    expect(Object.isFrozen(catalog[0]?.catalog.permissions[0])).toBe(true);
     expect(Object.isFrozen(catalog[0]?.catalog.fields[0])).toBe(true);
+
+    expect(registry.validate({
+      id: "content:note",
+      type: "core.note",
+      rendererVersion: 2,
+      revision: 0,
+      configuration: { text: "" },
+      requiredPermissions: [],
+      sourceNodeId: null,
+    })).toBe(false);
+    expect(registry.validate({
+      id: "content:note",
+      type: "core.note",
+      rendererVersion: 2,
+      revision: 0,
+      configuration: { text: "" },
+      requiredPermissions: ["note.read", "note.read"],
+      sourceNodeId: null,
+    })).toBe(false);
   });
 
   it("rejects catalog fields that are not represented by string configuration values", () => {
@@ -118,6 +144,7 @@ describe("content renderer contract", () => {
         defaultHeight: 4,
         initialConfiguration: {},
         requiredPermissions: [],
+        permissions: [],
         fields: [{
           key: "value",
           labelKey: "core.content.invalid.value",

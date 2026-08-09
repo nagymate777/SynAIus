@@ -96,6 +96,23 @@ export function createThreadStreamRenderer(
       defaultHeight: 16,
       initialConfiguration: { threadId: null },
       requiredPermissions: threadStreamModuleManifest.permissions,
+      permissions: [
+        {
+          id: "codex.thread.read",
+          titleKey: "module.thread-stream.permission.read.title",
+          descriptionKey: "module.thread-stream.permission.read.description",
+        },
+        {
+          id: "codex.thread.steer",
+          titleKey: "module.thread-stream.permission.steer.title",
+          descriptionKey: "module.thread-stream.permission.steer.description",
+        },
+        {
+          id: "codex.turn.interrupt",
+          titleKey: "module.thread-stream.permission.interrupt.title",
+          descriptionKey: "module.thread-stream.permission.interrupt.description",
+        },
+      ],
       fields: [],
     },
     validateConfiguration: isThreadStreamConfiguration,

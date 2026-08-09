@@ -68,7 +68,7 @@ export interface WorkspacePreferences {
 }
 
 export interface WorkspaceState {
-  schemaVersion: 7;
+  schemaVersion: 8;
   id: string;
   revision: number;
   activeViewId: string;
@@ -79,6 +79,7 @@ export interface WorkspaceState {
   views: Record<string, WorkspaceView>;
   boxes: Record<string, BoxNode>;
   contents: Record<string, ContentInstance>;
+  permissionGrants: Record<string, string[]>;
   preferences: WorkspacePreferences;
   localeMessages: Record<string, string>;
   globalStyle: BoxStyle;
@@ -201,6 +202,10 @@ export interface LegacyWorkspaceStateV6 {
   globalStyle: BoxStyle;
 }
 
+export type LegacyWorkspaceStateV7 = Omit<WorkspaceState, "schemaVersion" | "permissionGrants"> & {
+  schemaVersion: 7;
+};
+
 interface CommandEnvelope<TType extends string, TPayload> {
   id: string;
   expectedRevision: number;
@@ -228,10 +233,12 @@ export type WorkspaceCommand =
       parentId: string | null;
       name: string;
       rect: GridRect;
+      grantedPermissions?: string[];
     }>
   | CommandEnvelope<"content.configure", { contentId: string; configuration: JsonObject }>
   | CommandEnvelope<"content.delete", { contentId: string }>
   | CommandEnvelope<"box.content.attach", { boxId: string; contentId: string | null }>
+  | CommandEnvelope<"box.permissions.set", { boxId: string; permissions: string[] }>
   | CommandEnvelope<"box.visibility.set", { boxId: string; hiddenWhenLocked: boolean }>
   | CommandEnvelope<"box.create", { boxId: string; viewId: string; parentId: string | null; name: string; rect: GridRect }>
   | CommandEnvelope<"box.rename", { boxId: string; name: string }>
@@ -318,7 +325,7 @@ export function createWorkspace(input: {
     };
   }
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: workspaceId,
     revision: 0,
     activeViewId: initialViewId,
@@ -335,6 +342,7 @@ export function createWorkspace(input: {
     },
     boxes,
     contents: {},
+    permissionGrants: {},
     preferences: { handlesVisible: true, namesVisible: true },
     localeMessages,
     globalStyle: { declarations: {}, scopedCss: "" },
@@ -399,7 +407,7 @@ export function migrateWorkspaceV1(
   const layouts = layoutsFromBuiltInBoxes(boxes);
 
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -410,6 +418,7 @@ export function migrateWorkspaceV1(
     views,
     boxes,
     contents: {},
+    permissionGrants: {},
     preferences: { handlesVisible: true, namesVisible: true },
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -440,7 +449,7 @@ export function migrateWorkspaceV2(
   addCloneNameTemplates(localeMessages, cloneNameTemplates);
   const layouts = layoutsFromBuiltInBoxes(boxes);
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -451,6 +460,7 @@ export function migrateWorkspaceV2(
     views: structuredClone(current.views),
     boxes,
     contents: {},
+    permissionGrants: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -479,7 +489,7 @@ export function migrateWorkspaceV3(
   addCloneNameTemplates(localeMessages, cloneNameTemplates);
   const layouts = layoutsFromBuiltInBoxes(boxes);
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -490,6 +500,7 @@ export function migrateWorkspaceV3(
     views: structuredClone(current.views),
     boxes,
     contents: {},
+    permissionGrants: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -512,7 +523,7 @@ export function migrateWorkspaceV4(
   addCloneNameTemplates(localeMessages, cloneNameTemplates);
   const layouts = layoutsFromBuiltInBoxes(boxes);
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -523,6 +534,7 @@ export function migrateWorkspaceV4(
     views: structuredClone(current.views),
     boxes,
     contents: {},
+    permissionGrants: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -542,7 +554,7 @@ export function migrateWorkspaceV5(current: LegacyWorkspaceStateV5): WorkspaceSt
   const localeMessages = namespaceWorkspaceMessages(current.localeMessages);
   addMissingBoxLocaleMessages(localeMessages, boxes);
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -553,6 +565,7 @@ export function migrateWorkspaceV5(current: LegacyWorkspaceStateV5): WorkspaceSt
     views: structuredClone(current.views),
     boxes,
     contents: {},
+    permissionGrants: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -573,12 +586,28 @@ export function migrateWorkspaceV6(current: LegacyWorkspaceStateV6): WorkspaceSt
   addMissingBoxLocaleMessages(localeMessages, boxes);
   return {
     ...structuredClone(current),
-    schemaVersion: 7,
+    schemaVersion: 8,
     layouts,
     boxes,
     contents: {},
+    permissionGrants: {},
     localeMessages,
   };
+}
+
+export function migrateWorkspaceV7(current: LegacyWorkspaceStateV7): WorkspaceState {
+  const migrated: WorkspaceState = {
+    ...structuredClone(current),
+    schemaVersion: 8,
+    permissionGrants: {},
+  };
+  for (const box of Object.values(migrated.boxes)) {
+    const content = box.contentId ? migrated.contents[box.contentId] : null;
+    if (content?.requiredPermissions.length) {
+      migrated.permissionGrants[box.id] = [...content.requiredPermissions];
+    }
+  }
+  return migrated;
 }
 
 export function applyWorkspaceCommand(current: WorkspaceState, command: WorkspaceCommand): CommandResult {
@@ -755,6 +784,11 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         cloneOrdinal: null,
         hiddenWhenLocked: false,
       };
+      const grantedPermissions = validatedPermissions(
+        command.payload.grantedPermissions ?? [],
+        content.requiredPermissions,
+      );
+      if (grantedPermissions.length) state.permissionGrants[command.payload.boxId] = grantedPermissions;
       break;
     }
     case "content.configure": {
@@ -776,6 +810,16 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       const box = requireContentBox(state, command.payload.boxId);
       if (command.payload.contentId !== null) requireContent(state, command.payload.contentId);
       box.contentId = command.payload.contentId;
+      delete state.permissionGrants[box.id];
+      break;
+    }
+    case "box.permissions.set": {
+      const box = requireContentBox(state, command.payload.boxId);
+      const content = box.contentId ? requireContent(state, box.contentId) : null;
+      if (!content) throw new DomainError("box.permissions.content.required");
+      const permissions = validatedPermissions(command.payload.permissions, content.requiredPermissions);
+      if (permissions.length) state.permissionGrants[box.id] = permissions;
+      else delete state.permissionGrants[box.id];
       break;
     }
     case "box.visibility.set": {
@@ -900,6 +944,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
           candidate.cloneOrdinal = null;
         });
       delete state.boxes[box.id];
+      delete state.permissionGrants[box.id];
       if (
         detachedContentId
         && !Object.values(state.boxes).some((candidate) => candidate.contentId === detachedContentId)
@@ -1151,10 +1196,22 @@ function requireContent(state: WorkspaceState, contentId: string) {
   return content;
 }
 
+function validatedPermissions(requested: string[], allowed: readonly string[]) {
+  if (!Array.isArray(requested)
+    || new Set(requested).size !== requested.length
+    || requested.some((permission) => typeof permission !== "string"
+      || !permission.trim()
+      || !allowed.includes(permission))) {
+    throw new DomainError("box.permissions.invalid");
+  }
+  return allowed.filter((permission) => requested.includes(permission));
+}
+
 function assertContentInstance(content: ContentInstance) {
   if (!Number.isInteger(content.rendererVersion) || content.rendererVersion < 1
     || !Number.isInteger(content.revision) || content.revision < 0
     || !Array.isArray(content.requiredPermissions)
+    || new Set(content.requiredPermissions).size !== content.requiredPermissions.length
     || content.requiredPermissions.some((permission) => typeof permission !== "string" || !permission.trim())
     || (content.sourceNodeId !== null && !content.sourceNodeId.trim())) {
     throw new DomainError("content.invalid");

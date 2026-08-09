@@ -210,6 +210,35 @@ button:disabled {
   overflow: auto;
 }
 
+.content-permission-gate {
+  display: grid;
+  min-height: 100%;
+  place-content: center;
+  gap: 0.65rem;
+  padding: 1.2rem;
+  background: #151b25;
+  color: #dce5f2;
+  text-align: center;
+}
+
+.content-permission-gate p,
+.content-permission-gate ul {
+  margin: 0;
+}
+
+.content-permission-gate ul {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0;
+  color: #aebdd0;
+  font-size: 0.8rem;
+  list-style: none;
+}
+
+.content-permission-gate button {
+  justify-self: center;
+}
+
 .system-box-action {
   position: absolute;
   z-index: 2;
@@ -371,6 +400,42 @@ button:disabled {
   color: #9aa8ba;
   font-size: 0.78rem;
   line-height: 1.35;
+}
+
+.permission-list {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+}
+
+.context-menu .permission-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.55rem;
+  border: 1px solid #344054;
+  border-radius: 0.55rem;
+  padding: 0.6rem;
+  cursor: pointer;
+}
+
+.context-menu .permission-row input {
+  width: auto;
+  margin-top: 0.15rem;
+}
+
+.permission-row span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.permission-row small {
+  color: #9aa8ba;
+  line-height: 1.35;
+}
+
+.permission-actions {
+  margin-top: 0.4rem;
 }
 
 .snapshot-list {

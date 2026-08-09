@@ -31,6 +31,11 @@ export function createArtifactViewerRenderer(
       defaultHeight: 12,
       initialConfiguration: { provider: "thread-file", threadId: "", path: "" },
       requiredPermissions: artifactViewerModuleManifest.permissions,
+      permissions: [{
+        id: "artifact.thread-file.read",
+        titleKey: "module.artifact-viewer.permission.read.title",
+        descriptionKey: "module.artifact-viewer.permission.read.description",
+      }],
       fields: [
         {
           key: "threadId",

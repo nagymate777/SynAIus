@@ -26,6 +26,7 @@ export function initializeOperaiWorkspace(initial: WorkspaceState) {
     parentId: null,
     name: hu["module.thread-stream.defaultBoxName"],
     rect: { column: 0, row: 4, width: 18, height: 16 },
+    grantedPermissions: [...threadStreamModuleManifest.permissions],
   });
 }
 

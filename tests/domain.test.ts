@@ -29,7 +29,7 @@ describe("workspace command core", () => {
   it("creates protected global view and device control boxes on the dense grid", () => {
     const state = initial();
     const systemBoxes = Object.values(state.boxes).filter((box) => box.role.type !== "content");
-    expect(state.schemaVersion).toBe(7);
+    expect(state.schemaVersion).toBe(8);
     expect(state.activeLayout).toBe("desktop");
     expect(state.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(state.views.main.grid.columns).toBe(24);
@@ -63,6 +63,22 @@ describe("workspace command core", () => {
       type: "view.activate",
       payload: { viewId: "main" },
     })).toThrowError(new DomainError("workspace.revision.conflict"));
+  });
+
+  it("rejects duplicate content permission declarations", () => {
+    expect(() => apply(initial(), {
+      type: "content.create",
+      payload: {
+        content: {
+          id: "content:invalid-permissions",
+          type: "core.invalid",
+          rendererVersion: 1,
+          configuration: {},
+          requiredPermissions: ["permission.read", "permission.read"],
+          sourceNodeId: null,
+        },
+      },
+    })).toThrowError(new DomainError("content.invalid"));
   });
 
   it("keeps box names unique across the workspace", () => {
@@ -396,7 +412,7 @@ describe("workspace command core", () => {
   });
 
   it("creates and attaches a content box atomically", () => {
-    const state = apply(initial(), {
+    let state = apply(initial(), {
       type: "content.box.create",
       payload: {
         content: {
@@ -412,6 +428,7 @@ describe("workspace command core", () => {
         parentId: null,
         name: "app.ts",
         rect: { column: 6, row: 4, width: 12, height: 10 },
+        grantedPermissions: ["artifact.thread-file.read"],
       },
     });
 
@@ -421,5 +438,51 @@ describe("workspace command core", () => {
       role: { type: "content" },
       name: "app.ts",
     });
+    expect(state.permissionGrants["box:artifact"]).toEqual(["artifact.thread-file.read"]);
+
+    expect(() => apply(state, {
+      type: "box.permissions.set",
+      payload: { boxId: "box:artifact", permissions: ["artifact.thread-file.write"] },
+    })).toThrowError(new DomainError("box.permissions.invalid"));
+
+    state = apply(state, {
+      type: "box.permissions.set",
+      payload: { boxId: "box:artifact", permissions: [] },
+    });
+    expect(state.permissionGrants["box:artifact"]).toBeUndefined();
+
+    state = apply(state, {
+      type: "box.permissions.set",
+      payload: { boxId: "box:artifact", permissions: ["artifact.thread-file.read"] },
+    });
+    state = apply(state, {
+      type: "box.clonePaste",
+      payload: {
+        sourceBoxId: "box:artifact",
+        targetViewId: "main",
+        layout: "desktop",
+        rect: { column: 20, row: 4, width: 12, height: 10 },
+        idMap: { "box:artifact": "box:artifact-clone" },
+      },
+    });
+    expect(state.boxes["box:artifact-clone"].contentId).toBe("content:artifact");
+    expect(state.permissionGrants["box:artifact-clone"]).toBeUndefined();
+
+    state = apply(state, {
+      type: "box.cutPaste",
+      payload: {
+        boxId: "box:artifact",
+        targetViewId: "main",
+        layout: "desktop",
+        rect: { column: -12, row: 4, width: 12, height: 10 },
+      },
+    });
+    expect(state.permissionGrants["box:artifact"]).toEqual(["artifact.thread-file.read"]);
+
+    state = apply(state, {
+      type: "box.content.attach",
+      payload: { boxId: "box:artifact", contentId: "content:artifact" },
+    });
+    expect(state.permissionGrants["box:artifact"]).toBeUndefined();
   });
 });

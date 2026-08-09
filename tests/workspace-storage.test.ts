@@ -8,12 +8,14 @@ import {
   migrateWorkspaceV4,
   migrateWorkspaceV5,
   migrateWorkspaceV6,
+  migrateWorkspaceV7,
   type LegacyWorkspaceStateV1,
   type LegacyWorkspaceStateV2,
   type LegacyWorkspaceStateV3,
   type LegacyWorkspaceStateV4,
   type LegacyWorkspaceStateV5,
   type LegacyWorkspaceStateV6,
+  type LegacyWorkspaceStateV7,
 } from "@synaius/domain";
 import {
   isLegacyWorkspaceState,
@@ -22,6 +24,7 @@ import {
   isLegacyWorkspaceStateV4,
   isLegacyWorkspaceStateV5,
   isLegacyWorkspaceStateV6,
+  isLegacyWorkspaceStateV7,
   isWorkspaceState,
 } from "@synaius/workspace-ui";
 
@@ -30,6 +33,7 @@ describe("workspace storage validation", () => {
     const workspace = createWorkspace({ workspaceId: "workspace", initialViewId: "main", initialViewName: "Alapnézet" });
     expect(isWorkspaceState(workspace)).toBe(true);
     expect(isWorkspaceState({ ...workspace, activeViewId: "missing" })).toBe(false);
+    expect(isWorkspaceState({ ...workspace, permissionGrants: { missing: ["permission.read"] } })).toBe(false);
   });
 
   it("validates persisted custom layouts and their per-box geometry", () => {
@@ -103,7 +107,7 @@ describe("workspace storage validation", () => {
     };
     expect(isLegacyWorkspaceStateV2(previous)).toBe(true);
     const migrated = migrateWorkspaceV2(previous, "tablet");
-    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.schemaVersion).toBe(8);
     expect(migrated.activeLayout).toBe("tablet");
     expect(migrated.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(migrated.boxes.content.layoutRects).toEqual({
@@ -142,7 +146,7 @@ describe("workspace storage validation", () => {
     expect(isLegacyWorkspaceStateV3(previous)).toBe(true);
     const migrated = migrateWorkspaceV3(previous);
     const systemBoxes = Object.values(migrated.boxes).filter((box) => box.role.type !== "content");
-    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.schemaVersion).toBe(8);
     expect(systemBoxes.every((box) => box.labelKey && migrated.localeMessages[box.labelKey] === box.name)).toBe(true);
   });
 
@@ -175,7 +179,7 @@ describe("workspace storage validation", () => {
       first: "{name} klónja",
       numbered: "{name} {count}. klónja",
     });
-    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.schemaVersion).toBe(8);
     expect(Object.values(migrated.boxes).every((box) => !("archived" in box))).toBe(true);
     expect(Object.values(migrated.boxes).every((box) => box.cloneSourceId === null)).toBe(true);
   });
@@ -209,7 +213,7 @@ describe("workspace storage validation", () => {
     };
     expect(isLegacyWorkspaceStateV5(previous)).toBe(true);
     const migrated = migrateWorkspaceV5(previous);
-    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.schemaVersion).toBe(8);
     expect(migrated.layoutOrder).toEqual(["desktop", "tablet", "mobile"]);
     expect(Object.values(migrated.layouts).every((layout) => layout.builtIn)).toBe(true);
     expect(Object.values(migrated.boxes).every((box) => !box.hiddenWhenLocked)).toBe(true);
@@ -243,9 +247,48 @@ describe("workspace storage validation", () => {
 
     expect(isLegacyWorkspaceStateV6(previous)).toBe(true);
     const migrated = migrateWorkspaceV6(previous);
-    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.schemaVersion).toBe(8);
     expect(migrated.contents).toEqual({});
     expect(Object.values(migrated.boxes).every((box) => box.contentId === null)).toBe(true);
     expect(migrated.localeMessages["workspace.box.cloneName"]).toBeDefined();
+  });
+
+  it("grandfathers version-seven content permissions during migration", () => {
+    const initial = createWorkspace({ workspaceId: "workspace", initialViewId: "main", initialViewName: "Alapnézet" });
+    const current = applyWorkspaceCommand(initial, {
+      id: "create-content-box",
+      expectedRevision: initial.revision,
+      type: "content.box.create",
+      payload: {
+        content: {
+          id: "content:artifact",
+          type: "module.artifact-viewer.file",
+          rendererVersion: 1,
+          configuration: { provider: "thread-file", threadId: "thread-1", path: "src/app.ts" },
+          requiredPermissions: ["artifact.thread-file.read"],
+          sourceNodeId: null,
+        },
+        boxId: "box:artifact",
+        viewId: "main",
+        parentId: null,
+        name: "app.ts",
+        rect: { column: 6, row: 4, width: 12, height: 10 },
+      },
+    }).state;
+    const {
+      schemaVersion: _schemaVersion,
+      permissionGrants: _permissionGrants,
+      ...legacyBase
+    } = current;
+    const legacy: LegacyWorkspaceStateV7 = { ...legacyBase, schemaVersion: 7 };
+
+    expect(isLegacyWorkspaceStateV7(legacy)).toBe(true);
+    const migrated = migrateWorkspaceV7(legacy);
+    expect(migrated.schemaVersion).toBe(8);
+    expect(migrated.permissionGrants["box:artifact"]).toEqual(["artifact.thread-file.read"]);
+    expect(isWorkspaceState(migrated)).toBe(true);
+    const invalid = structuredClone(migrated);
+    invalid.contents["content:artifact"].requiredPermissions.push("artifact.thread-file.read");
+    expect(isWorkspaceState(invalid)).toBe(false);
   });
 });

@@ -34,6 +34,11 @@ describe("OperAI thread-stream composition", () => {
       contentId: OPERAI_THREAD_STREAM_CONTENT_ID,
       viewId: "main",
     });
+    expect(initialized.permissionGrants[OPERAI_THREAD_STREAM_BOX_ID]).toEqual([
+      "codex.thread.read",
+      "codex.thread.steer",
+      "codex.turn.interrupt",
+    ]);
     expect(repeated).toBe(initialized);
   });
 
