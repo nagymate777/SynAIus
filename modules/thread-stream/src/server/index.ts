@@ -1,5 +1,5 @@
 export { AppServerClient, reconnectDelayMs, toThreadSnapshot } from "./app-server-client.ts";
-export { artifactRootForThread, readArtifactFile } from "./artifact.ts";
+export { artifactRootForThread, indexArtifactFiles, readArtifactFile } from "./artifact.ts";
 export { createThreadStreamHttpServer } from "./http.ts";
 export { ThreadStreamService } from "./service.ts";
 export { ThreadEventStore } from "./store.ts";

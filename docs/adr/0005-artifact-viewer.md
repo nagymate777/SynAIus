@@ -15,6 +15,12 @@ Az első változat UTF-8 szöveget, biztonságosan React-elemekké bontott Markd
 
 A fájlaktivitás megnyitása egyetlen `content.box.create` domainparanccsal hozza létre a tartalompéldányt, a dobozt és a köztük lévő kapcsolatot. Így a művelet atomi, egy lépésben visszavonható, és ugyanaz a verziózott parancsréteg használható a felhasználói felületről, MCP-ből vagy későbbi automatizációból.
 
+## Fájlindex és nézetek
+
+A thread fájlböngészője nem járja be önállóan a munkamappa fájlrendszerét. Az index kizárólag az App Server `fileChange` itemjeiben közölt fájlokat tartalmazza, útvonalanként a legutóbbi változással és a változások számával. Az index és az egyedi fájlolvasás ugyanazt az `ArtifactGateway` szerződést használja.
+
+Az artifact-doboz az aktuális fájltartalom és a legutóbbi diff között válthat. A diff akkor is megjeleníthető, ha a fájlt időközben törölték. Ugyanazon thread és fájl ismételt megnyitása nem hoz létre újabb tartalompéldányt: a munkaterület aktiválja a megfelelő nézetet, középre igazítja és röviden kiemeli a már létező dobozt.
+
 ## Következmények
 
 - A munkaterület mentése csak artifact-hivatkozást tartalmaz, helyi fájltartalmat nem másol a böngészőtárba.

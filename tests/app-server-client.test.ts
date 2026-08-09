@@ -89,7 +89,7 @@ describe("Codex app-server client", () => {
               id: "file-1",
               type: "fileChange",
               status: "completed",
-              changes: [{ path: "src/app.ts", kind: "update", diff: "+new" }],
+              changes: [{ path: "src/app.ts", kind: { type: "update", move_path: null }, diff: "+new" }],
             },
             {
               id: "mcp-1",
@@ -125,7 +125,7 @@ describe("Codex app-server client", () => {
         items: [
           { type: "agentMessage" },
           { type: "commandExecution", aggregatedOutput: "ok", exitCode: 0 },
-          { type: "fileChange", changes: [{ path: "src/app.ts", diff: "+new" }] },
+          { type: "fileChange", changes: [{ path: "src/app.ts", kind: "update", diff: "+new" }] },
           { type: "mcpToolCall", argumentsPreview: expect.stringContaining("id") },
         ],
       }],

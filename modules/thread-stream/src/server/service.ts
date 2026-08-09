@@ -13,7 +13,7 @@ import type {
   ThreadListQuery,
   ThreadSnapshot,
 } from "@synaius/protocol";
-import { artifactRootForThread, readArtifactFile } from "./artifact.ts";
+import { artifactRootForThread, indexArtifactFiles, readArtifactFile } from "./artifact.ts";
 import { AppServerClient, reconnectDelayMs, toThreadSnapshot } from "./app-server-client.ts";
 import { ThreadEventStore } from "./store.ts";
 
@@ -243,6 +243,11 @@ export class ThreadStreamService {
     }
     const refreshed = await this.readThread(threadId);
     return readArtifactFile(threadId, artifactRootForThread(refreshed.raw, path), path);
+  }
+
+  async listThreadFileArtifacts(threadId: string) {
+    const snapshot = this.store.readSnapshot(threadId) ?? await this.readThread(threadId);
+    return indexArtifactFiles(threadId, snapshot.raw);
   }
 
   async resumeThread(threadId: string): Promise<ThreadSnapshot> {

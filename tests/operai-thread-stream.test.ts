@@ -138,7 +138,11 @@ describe("OperAI thread-stream composition", () => {
         id: "file-1",
         type: "fileChange",
         status: "inProgress",
-        changes: [{ path: "src/app.ts", kind: "update", diff: "@@ -1 +1 @@\n-old\n+new" }],
+        changes: [{
+          path: "src/app.ts",
+          kind: { type: "update", move_path: null },
+          diff: "@@ -1 +1 @@\n-old\n+new",
+        }],
       },
     });
     const diffUpdated = event("21", "turn/diff/updated", {

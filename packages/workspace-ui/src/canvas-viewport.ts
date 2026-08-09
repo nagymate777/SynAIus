@@ -1,4 +1,4 @@
-import type { LayoutId } from "@synaius/domain";
+import type { GridRect, LayoutId } from "@synaius/domain";
 import type { GridMetrics } from "./grid-interaction";
 
 export interface CanvasViewport {
@@ -59,6 +59,22 @@ export function zoomViewportAt(
     panX: localX - worldX * zoom,
     panY: localY - worldY * zoom,
     zoom,
+  };
+}
+
+export function centerViewportOnRect(
+  viewport: CanvasViewport,
+  rect: GridRect,
+  canvasWidth: number,
+  canvasHeight: number,
+  cellSize: number,
+): CanvasViewport {
+  const centerX = (rect.column + rect.width / 2) * cellSize;
+  const centerY = (rect.row + rect.height / 2) * cellSize;
+  return {
+    zoom: viewport.zoom,
+    panX: canvasWidth / 2 - centerX * viewport.zoom,
+    panY: canvasHeight / 2 - centerY * viewport.zoom,
   };
 }
 

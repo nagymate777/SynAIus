@@ -400,7 +400,7 @@ function projectItemForViewer(item: Record<string, unknown>, id: string) {
         if (!path) return [];
         return [{
           path: boundedViewerText(path),
-          kind: stringValue(change.kind) ?? "unknown",
+          kind: patchChangeKind(change.kind),
           diff: boundedViewerText(stringValue(change.diff) ?? ""),
         }];
       }),
@@ -433,6 +433,11 @@ function projectItemForViewer(item: Record<string, unknown>, id: string) {
     };
   }
   return null;
+}
+
+function patchChangeKind(value: unknown) {
+  const kind = stringValue(value) ?? stringValue(asRecord(value).type);
+  return kind === "add" || kind === "update" || kind === "delete" ? kind : "unknown";
 }
 
 function boundedViewerText(value: string, maximum = MAX_VIEWER_TEXT) {

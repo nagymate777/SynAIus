@@ -3,6 +3,7 @@ import type { ContentInstance, ContentRendererDefinition, JsonObject } from "@sy
 import { createTranslator, type TranslationDictionary } from "@synaius/i18n";
 import type {
   CodexModelSummary,
+  ArtifactFileEntry,
   DurableThreadEvent,
   PendingThreadInteraction,
   ServerRequestId,
@@ -26,6 +27,7 @@ import {
   type ThreadStreamLine,
   type ThreadTurnGroup,
 } from "./activity.ts";
+import { projectThreadArtifactFiles } from "./artifact-index.ts";
 import { THREAD_STREAM_CONTENT_TYPE, THREAD_STREAM_RENDERER_VERSION } from "./index";
 import "./thread-stream.css";
 
@@ -38,6 +40,7 @@ export {
   projectThreadTurnEvent,
   projectThreadTurns,
 } from "./activity.ts";
+export { projectThreadArtifactFiles } from "./artifact-index.ts";
 export type {
   ThreadActivity,
   ThreadActivityStatus,
@@ -134,6 +137,8 @@ function ThreadStreamPanel({
   const [initialMessage, setInitialMessage] = useState("");
   const [interactions, setInteractions] = useState<PendingThreadInteraction[]>([]);
   const [respondingRequestId, setRespondingRequestId] = useState<ServerRequestId | null>(null);
+  const [artifactBrowserOpen, setArtifactBrowserOpen] = useState(false);
+  const [artifactSearch, setArtifactSearch] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -289,6 +294,13 @@ function ThreadStreamPanel({
       || (turn.status === "failed" && filters.errors);
     return visibleLines.length || visibleWithoutLines ? [{ turn, turnIndex, visibleLines }] : [];
   }), [filters, turns]);
+  const artifactFiles = useMemo(() => projectThreadArtifactFiles(turns), [turns]);
+  const visibleArtifactFiles = useMemo(() => {
+    const query = artifactSearch.trim().toLocaleLowerCase();
+    return query
+      ? artifactFiles.filter((file) => file.path.toLocaleLowerCase().includes(query))
+      : artifactFiles;
+  }, [artifactFiles, artifactSearch]);
 
   function toggleFilter(filter: ThreadStreamFilter) {
     setFilters((current) => ({ ...current, [filter]: !current[filter] }));
@@ -322,6 +334,8 @@ function ThreadStreamPanel({
 
   function selectThread(threadId: string) {
     setNewThreadOpen(false);
+    setArtifactBrowserOpen(false);
+    setArtifactSearch("");
     context.execute("content.configure", {
       contentId: content.id,
       configuration: { ...content.configuration, threadId: threadId || null },
@@ -513,6 +527,16 @@ function ThreadStreamPanel({
               {t("module.thread-stream.filter.all")}
             </button>
           </div>
+          <button
+            aria-pressed={artifactBrowserOpen}
+            className="thread-stream-artifacts-toggle"
+            onClick={() => setArtifactBrowserOpen((value) => !value)}
+            type="button"
+          >
+            {artifactBrowserOpen
+              ? t("module.thread-stream.artifacts.close")
+              : t("module.thread-stream.artifacts.open", { count: artifactFiles.length })}
+          </button>
           {(!following || unreadKeys.size > 0) && (
             <button className="thread-stream-latest" onClick={jumpToLatest} type="button">
               {unreadKeys.size > 0
@@ -578,6 +602,15 @@ function ThreadStreamPanel({
             </button>
           </div>
         </form>
+      ) : artifactBrowserOpen ? (
+        <ThreadArtifactBrowser
+          files={visibleArtifactFiles}
+          onOpenFile={onOpenFile ? openFile : undefined}
+          onSearch={setArtifactSearch}
+          search={artifactSearch}
+          t={t}
+          total={artifactFiles.length}
+        />
       ) : (
         <div
           className="thread-stream-log"
@@ -641,6 +674,61 @@ function ThreadStreamPanel({
           {t("module.thread-stream.action.interrupt")}
         </button>
       </form>
+    </section>
+  );
+}
+
+function ThreadArtifactBrowser({
+  files,
+  total,
+  search,
+  onSearch,
+  onOpenFile,
+  t,
+}: {
+  files: ArtifactFileEntry[];
+  total: number;
+  search: string;
+  onSearch(value: string): void;
+  onOpenFile?: (path: string) => void;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  return (
+    <section className="thread-stream-artifacts">
+      <header>
+        <input
+          aria-label={t("module.thread-stream.artifacts.search.label")}
+          onChange={(event) => onSearch(event.target.value)}
+          placeholder={t("module.thread-stream.artifacts.search.placeholder")}
+          type="search"
+          value={search}
+        />
+        <span>{search
+          ? t("module.thread-stream.artifacts.count.filtered", { visible: files.length, total })
+          : t("module.thread-stream.artifacts.count", { count: total })}</span>
+      </header>
+      <div className="thread-stream-artifact-list">
+        {files.map((file) => (
+          <article data-kind={file.changeKind} key={file.path}>
+            <div>
+              <strong>{file.name}</strong>
+              <code>{file.path}</code>
+            </div>
+            <span>{t(fileChangeKindKey(file.changeKind))}</span>
+            <small>{t("module.thread-stream.artifacts.changes", { count: file.occurrences })}</small>
+            {onOpenFile && (file.changeKind !== "delete" || Boolean(file.diff)) && (
+              <button onClick={() => onOpenFile(file.path)} type="button">
+                {t("module.thread-stream.artifacts.show")}
+              </button>
+            )}
+          </article>
+        ))}
+        {!files.length && (
+          <p>{t(search
+            ? "module.thread-stream.artifacts.empty.filtered"
+            : "module.thread-stream.artifacts.empty")}</p>
+        )}
+      </div>
     </section>
   );
 }

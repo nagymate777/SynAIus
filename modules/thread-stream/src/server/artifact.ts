@@ -1,8 +1,14 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
-import type { ArtifactDocument, ArtifactDocumentKind } from "@synaius/protocol";
+import type {
+  ArtifactDocument,
+  ArtifactDocumentKind,
+  ArtifactFileChangeKind,
+  ArtifactFileIndex,
+} from "@synaius/protocol";
 
 const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
+const MAX_ARTIFACT_DIFF_CHARACTERS = 200_000;
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
 const IMAGE_MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -136,6 +142,36 @@ export async function readArtifactFile(
   };
 }
 
+export function indexArtifactFiles(threadId: string, rawThread: unknown): ArtifactFileIndex {
+  const thread = asRecord(rawThread);
+  const cwd = stringValue(thread.cwd)?.trim() ?? "";
+  const files = new Map<string, ArtifactFileIndex["files"][number] & { order: number }>();
+  threadFileChanges(thread).forEach((change, order) => {
+    const canonicalPath = cwd
+      ? resolve(cwd, change.path)
+      : change.path.replaceAll("\\", "/");
+    const identity = comparablePath(canonicalPath);
+    const previous = files.get(identity);
+    files.set(identity, {
+      path: change.path,
+      name: basename(change.path),
+      changeKind: change.kind,
+      diff: change.diff.slice(0, MAX_ARTIFACT_DIFF_CHARACTERS),
+      occurrences: (previous?.occurrences ?? 0) + 1,
+      turnId: change.turnId,
+      itemId: change.itemId,
+      order,
+    });
+  });
+  return {
+    provider: "thread-file",
+    threadId,
+    files: [...files.values()]
+      .sort((left, right) => right.order - left.order || left.path.localeCompare(right.path))
+      .map(({ order: _order, ...file }) => file),
+  };
+}
+
 export function artifactRootForThread(rawThread: unknown, requestedPath: string) {
   const thread = asRecord(rawThread);
   const cwd = stringValue(thread.cwd)?.trim();
@@ -144,24 +180,51 @@ export function artifactRootForThread(rawThread: unknown, requestedPath: string)
 
   const requestedAbsolute = resolve(requestedPath);
   if (isPathInside(cwd, requestedAbsolute)) return cwd;
-  const authorizedPaths = (Array.isArray(thread.turns) ? thread.turns : [])
-    .flatMap((turn) => {
-      const turnRecord = asRecord(turn);
-      const items = Array.isArray(turnRecord.items) ? turnRecord.items as unknown[] : [];
-      return items.flatMap((item) => {
-        const record = asRecord(item);
-        if (record.type !== "fileChange" || !Array.isArray(record.changes)) return [];
-        return record.changes.flatMap((change) => {
-          const changedPath = stringValue(asRecord(change).path);
-          if (!changedPath) return [];
-          return [isAbsolute(changedPath) ? resolve(changedPath) : resolve(cwd, changedPath)];
-        });
-      });
-    });
+  const authorizedPaths = threadFileChanges(thread)
+    .map((change) => isAbsolute(change.path) ? resolve(change.path) : resolve(cwd, change.path));
   if (!authorizedPaths.some((path) => samePath(path, requestedAbsolute))) {
     throw artifactError("artifact.path.denied", 403);
   }
   return dirname(requestedAbsolute);
+}
+
+interface RawThreadFileChange {
+  path: string;
+  kind: ArtifactFileChangeKind;
+  diff: string;
+  turnId: string | null;
+  itemId: string | null;
+}
+
+function threadFileChanges(thread: Record<string, unknown>): RawThreadFileChange[] {
+  return (Array.isArray(thread.turns) ? thread.turns : []).flatMap((turn) => {
+    const turnRecord = asRecord(turn);
+    const turnId = stringValue(turnRecord.id);
+    const items = Array.isArray(turnRecord.items) ? turnRecord.items : [];
+    return items.flatMap((item) => {
+      const itemRecord = asRecord(item);
+      if (itemRecord.type !== "fileChange" || !Array.isArray(itemRecord.changes)) return [];
+      const itemId = stringValue(itemRecord.id);
+      return itemRecord.changes.flatMap((candidate) => {
+        const change = asRecord(candidate);
+        const path = stringValue(change.path)?.trim();
+        if (!path) return [];
+        const rawKind = stringValue(change.kind) ?? stringValue(asRecord(change.kind).type);
+        const kind: ArtifactFileChangeKind = rawKind === "add"
+          || rawKind === "update"
+          || rawKind === "delete"
+          ? rawKind
+          : "unknown";
+        return [{
+          path,
+          kind,
+          diff: stringValue(change.diff) ?? "",
+          turnId,
+          itemId,
+        }];
+      });
+    });
+  });
 }
 
 function assertWithinRoot(root: string, candidate: string) {
@@ -185,6 +248,11 @@ function samePath(left: string, right: string) {
   return process.platform === "win32"
     ? left.toLocaleLowerCase() === right.toLocaleLowerCase()
     : left === right;
+}
+
+function comparablePath(path: string) {
+  const normalized = path.replaceAll("\\", "/");
+  return process.platform === "win32" ? normalized.toLocaleLowerCase() : normalized;
 }
 
 function assertAllowedPath(pathFromRoot: string) {

@@ -57,6 +57,7 @@ import {
   DEFAULT_CANVAS_VIEWPORT,
   canvasCellSize,
   canvasViewportKey,
+  centerViewportOnRect,
   loadCanvasViewports,
   rootGridMetrics,
   saveCanvasViewports,
@@ -118,6 +119,7 @@ export interface WorkspaceContentRenderContext {
   box: BoxNode;
   workspace: WorkspaceState;
   execute<T extends WorkspaceCommand["type"]>(type: T, payload: CommandPayload<T>): void;
+  focusBox(boxId: string): void;
 }
 
 export interface WorkspaceApplicationProps {
@@ -150,11 +152,13 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
   const [panDrag, setPanDrag] = useState<PanDragState | null>(null);
   const [clipboard, setClipboard] = useState<BoxClipboard | null>(null);
   const [context, setContext] = useState<ContextState | null>(null);
+  const [focusedBoxId, setFocusedBoxId] = useState<string | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const panDragRef = useRef<PanDragState | null>(null);
   const rightButtonHeldRef = useRef(false);
   const suppressContextMenuRef = useRef(false);
   const suppressSystemClickRef = useRef(false);
+  const focusTimerRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
   const workspaceRef = useRef(workspace);
   const savedViewport = viewports[viewportStorageKey] ?? DEFAULT_CANVAS_VIEWPORT;
@@ -181,6 +185,10 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     if (clipboard && (!workspace.boxes[clipboard.boxId]
       || workspace.boxes[clipboard.boxId].role.type !== "content")) setClipboard(null);
   }, [clipboard, workspace.boxes]);
+
+  useEffect(() => () => {
+    if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
+  }, []);
 
   useEffect(() => {
     function onPointerMove(event: PointerEvent) {
@@ -267,6 +275,39 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
         payload,
       } as WorkspaceCommand).state,
     commandRecordsHistory(type));
+  }
+
+  function focusBox(boxId: string) {
+    const currentWorkspace = workspaceRef.current;
+    const requestedBox = currentWorkspace.boxes[boxId];
+    if (!requestedBox) return;
+    let rootBox = requestedBox;
+    while (rootBox.parentId && currentWorkspace.boxes[rootBox.parentId]) {
+      rootBox = currentWorkspace.boxes[rootBox.parentId];
+    }
+    const viewId = rootBox.viewId ?? currentWorkspace.activeViewId;
+    const layout = currentWorkspace.activeLayout;
+    const key = canvasViewportKey(viewId, layout);
+    const canvas = canvasRef.current;
+    if (canvas) {
+      setViewports((stored) => ({
+        ...stored,
+        [key]: centerViewportOnRect(
+          stored[key] ?? DEFAULT_CANVAS_VIEWPORT,
+          rootBox.layoutRects[layout],
+          canvas.clientWidth,
+          canvas.clientHeight,
+          canvasCellSize(canvas),
+        ),
+      }));
+    }
+    if (viewId !== currentWorkspace.activeViewId) send("view.activate", { viewId });
+    setFocusedBoxId(boxId);
+    if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = window.setTimeout(() => {
+      setFocusedBoxId((current) => current === boxId ? null : current);
+      focusTimerRef.current = null;
+    }, 1800);
   }
 
   function undoWorkspace() {
@@ -751,6 +792,7 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
         data-box-id={box.id}
         data-box-role={box.role.type}
         data-dragging={drag?.boxId === box.id}
+        data-focused={focusedBoxId === box.id}
         data-clipboard-mode={clipboard?.boxId === box.id ? clipboard.mode : undefined}
         data-hidden-when-locked={box.hiddenWhenLocked}
         key={box.id}
@@ -787,7 +829,12 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
         )}
         {box.role.type === "content" && box.contentId && contentRegistry && (
           <div className="box-content" data-content-id={box.contentId}>
-            {contentRegistry.render(workspace.contents[box.contentId], { box, workspace, execute: send })}
+            {contentRegistry.render(workspace.contents[box.contentId], {
+              box,
+              workspace,
+              execute: send,
+              focusBox,
+            })}
           </div>
         )}
         <div

@@ -129,6 +129,12 @@ button:disabled {
   box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.45);
 }
 
+.canvas-box[data-focused="true"] {
+  z-index: 18;
+  border-color: #70f3d5;
+  box-shadow: 0 0 0 0.18rem rgb(112 243 213 / 0.4), 0 0 2rem rgb(112 243 213 / 0.42);
+}
+
 .portal-shell[data-handles-visible="true"] .canvas-box[data-hidden-when-locked="true"] {
   border-color: #aab2bf;
   border-style: dashed;

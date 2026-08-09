@@ -11,7 +11,11 @@ import {
   ArtifactGatewayError,
   BrowserArtifactGateway,
 } from "@synaius/module-artifact-viewer/client";
-import { artifactRootForThread, readArtifactFile } from "@synaius/module-thread-stream/server";
+import {
+  artifactRootForThread,
+  indexArtifactFiles,
+  readArtifactFile,
+} from "@synaius/module-thread-stream/server";
 import type { WorkspaceContentRenderContext } from "@synaius/workspace-ui";
 
 const temporaryDirectories: string[] = [];
@@ -87,6 +91,33 @@ describe("artifact viewer", () => {
     expect(artifactRootForThread(raw, changed)).toBe(dirname(changed));
     expect(() => artifactRootForThread(raw, join(project, "src", "secret.ts")))
       .toThrowError(expect.objectContaining({ message: "artifact.path.denied", statusCode: 403 }));
+
+    expect(indexArtifactFiles("thread-1", {
+      ...raw,
+      turns: [
+        raw.turns[0],
+        {
+          id: "turn-2",
+          items: [{
+            id: "change-2",
+            type: "fileChange",
+            changes: [{
+              path: changed,
+              kind: { type: "update", move_path: null },
+              diff: "+newer",
+            }],
+          }],
+        },
+      ],
+    }).files).toEqual([expect.objectContaining({
+      path: changed,
+      name: "app.ts",
+      changeKind: "update",
+      diff: "+newer",
+      occurrences: 2,
+      turnId: "turn-2",
+      itemId: "change-2",
+    })]);
   });
 
   it("uses the scoped bridge endpoint and preserves server error codes", async () => {
@@ -95,6 +126,21 @@ describe("artifact viewer", () => {
       baseUrl: "/bridge",
       fetchImplementation: (async (url: string | URL | Request) => {
         requests.push(String(url));
+        if (String(url).endsWith("/artifacts")) {
+          return new Response(JSON.stringify({
+            provider: "thread-file",
+            threadId: "thread/1",
+            files: [{
+              path: "src/app.ts",
+              name: "app.ts",
+              changeKind: "update",
+              diff: "+test",
+              occurrences: 1,
+              turnId: "turn-1",
+              itemId: "change-1",
+            }],
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
         return new Response(JSON.stringify({
           provider: "thread-file",
           threadId: "thread/1",
@@ -110,9 +156,14 @@ describe("artifact viewer", () => {
       }) as typeof fetch,
     });
 
+    await expect(gateway.listThreadFiles("thread/1"))
+      .resolves.toMatchObject({ files: [expect.objectContaining({ name: "app.ts" })] });
     await expect(gateway.readThreadFile("thread/1", "src/app.ts"))
       .resolves.toMatchObject({ name: "app.ts", content: "test" });
-    expect(requests[0]).toBe("/bridge/threads/thread%2F1/artifacts/file?path=src%2Fapp.ts");
+    expect(requests).toEqual([
+      "/bridge/threads/thread%2F1/artifacts",
+      "/bridge/threads/thread%2F1/artifacts/file?path=src%2Fapp.ts",
+    ]);
 
     const failingGateway = new BrowserArtifactGateway({
       fetchImplementation: (async () => new Response(
@@ -132,11 +183,15 @@ describe("artifact viewer", () => {
     });
     const box = Object.values(workspace.boxes).find((candidate) => candidate.role.type === "device")!;
     const commands: Array<{ type: WorkspaceCommand["type"]; payload: unknown }> = [];
+    const focusedBoxes: string[] = [];
     const context: WorkspaceContentRenderContext = {
       box,
       workspace,
       execute(type, payload) {
         commands.push({ type, payload });
+      },
+      focusBox(boxId) {
+        focusedBoxes.push(boxId);
       },
     };
 
@@ -153,6 +208,60 @@ describe("artifact viewer", () => {
         configuration: { provider: "thread-file", threadId: "thread-1", path: "src/app.ts" },
       },
     });
+    expect(focusedBoxes).toEqual([]);
+  });
+
+  it("focuses an existing artifact box instead of opening a duplicate", () => {
+    const workspace = createWorkspace({
+      workspaceId: "artifact-focus-test",
+      initialViewId: "main",
+      initialViewName: "Teszt",
+    });
+    const sourceBox = Object.values(workspace.boxes).find(
+      (candidate) => candidate.role.type === "device",
+    )!;
+    workspace.contents["content:existing"] = {
+      id: "content:existing",
+      type: ARTIFACT_VIEWER_CONTENT_TYPE,
+      rendererVersion: 1,
+      configuration: {
+        provider: "thread-file",
+        threadId: "thread-1",
+        path: "C:\\Project\\src\\app.ts",
+      },
+      requiredPermissions: ["artifact.thread-file.read"],
+      sourceNodeId: null,
+      revision: 0,
+    };
+    workspace.boxes["box:existing"] = {
+      ...structuredClone(sourceBox),
+      id: "box:existing",
+      viewId: "main",
+      name: "app.ts",
+      role: { type: "content" },
+      contentId: "content:existing",
+      labelKey: null,
+    };
+    const commands: string[] = [];
+    const focusedBoxes: string[] = [];
+    const result = openThreadFileArtifact({
+      box: sourceBox,
+      workspace,
+      execute(type) {
+        commands.push(type);
+      },
+      focusBox(boxId) {
+        focusedBoxes.push(boxId);
+      },
+    }, {
+      threadId: "thread-1",
+      path: "c:/project/src/app.ts",
+      boxName: "app.ts (2)",
+    });
+
+    expect(result).toMatchObject({ action: "focused", boxId: "box:existing" });
+    expect(focusedBoxes).toEqual(["box:existing"]);
+    expect(commands).toEqual([]);
   });
 });
 

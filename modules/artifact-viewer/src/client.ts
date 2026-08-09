@@ -1,4 +1,4 @@
-import type { ArtifactDocument, ArtifactGateway } from "@synaius/protocol";
+import type { ArtifactDocument, ArtifactFileIndex, ArtifactGateway } from "@synaius/protocol";
 
 export interface BrowserArtifactGatewayOptions {
   baseUrl?: string;
@@ -18,6 +18,15 @@ export class BrowserArtifactGateway implements ArtifactGateway {
   constructor(options: BrowserArtifactGatewayOptions = {}) {
     this.baseUrl = (options.baseUrl ?? "/api/thread-stream").replace(/\/$/, "");
     this.fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
+  }
+
+  async listThreadFiles(threadId: string): Promise<ArtifactFileIndex> {
+    const response = await this.fetchImplementation(
+      `${this.baseUrl}/threads/${encodeURIComponent(threadId)}/artifacts`,
+    );
+    const body = await response.json() as ArtifactFileIndex & { error?: string };
+    if (!response.ok) throw new ArtifactGatewayError(body.error ?? `artifact.http.${response.status}`);
+    return body;
   }
 
   async readThreadFile(threadId: string, path: string): Promise<ArtifactDocument> {

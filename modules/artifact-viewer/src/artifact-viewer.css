@@ -48,6 +48,31 @@
   padding: 0.34rem 0.5rem;
 }
 
+.artifact-viewer-header > .artifact-viewer-actions,
+.artifact-viewer-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.artifact-viewer-actions button {
+  border: 1px solid #36535b;
+  border-radius: 0.35rem;
+  background: #07171d;
+  color: #91aaa8;
+  font-size: 0.67rem;
+}
+
+.artifact-viewer-actions button[aria-pressed="true"] {
+  border-color: #4b8f87;
+  background: #14332f;
+  color: #b9e8df;
+}
+
+.artifact-viewer-actions button:disabled {
+  opacity: 0.42;
+}
+
 .artifact-viewer-meta {
   display: flex;
   gap: 0.5rem;
@@ -93,6 +118,52 @@
   max-height: 100%;
   margin: auto;
   object-fit: contain;
+}
+
+.artifact-viewer-code {
+  min-width: max-content;
+  padding: 0.4rem 0;
+  color: #d8e7e5;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  counter-reset: artifact-line;
+}
+
+.artifact-viewer-code > div {
+  min-width: 100%;
+  display: grid;
+  grid-template-columns: 3.6rem minmax(max-content, 1fr);
+}
+
+.artifact-viewer-code > div > span {
+  padding: 0 0.65rem 0 0.35rem;
+  border-right: 1px solid #1d343a;
+  color: #587278;
+  text-align: right;
+  user-select: none;
+}
+
+.artifact-viewer-code > div > code {
+  display: block;
+  padding: 0 0.7rem;
+  font: inherit;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.artifact-viewer-code[data-diff="true"] > div[data-kind="add"] {
+  background: rgb(31 104 78 / 32%);
+  color: #b9efd3;
+}
+
+.artifact-viewer-code[data-diff="true"] > div[data-kind="delete"] {
+  background: rgb(126 48 53 / 34%);
+  color: #ffc2c2;
+}
+
+.artifact-viewer-code[data-diff="true"] > div[data-kind="range"] {
+  background: rgb(38 83 110 / 38%);
+  color: #addcf5;
 }
 
 .artifact-viewer-markdown {

@@ -393,8 +393,9 @@ function fileChanges(value: unknown): ThreadFileChange[] {
     const change = asRecord(candidate);
     const path = stringValue(change.path);
     if (!path) return [];
-    const kind = ["add", "update", "delete"].includes(String(change.kind))
-      ? change.kind as ThreadFileChange["kind"]
+    const rawKind = stringValue(change.kind) ?? stringValue(asRecord(change.kind).type);
+    const kind = rawKind && ["add", "update", "delete"].includes(rawKind)
+      ? rawKind as ThreadFileChange["kind"]
       : "unknown";
     return [{
       path: boundedText(path),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { zoomViewportAt } from "@synaius/workspace-ui";
+import { centerViewportOnRect, zoomViewportAt } from "@synaius/workspace-ui";
 
 describe("canvas viewport", () => {
   it("keeps the world point under the pointer stable while zooming", () => {
@@ -21,5 +21,16 @@ describe("canvas viewport", () => {
     expect(viewport.zoom).toBe(0.2);
     for (let index = 0; index < 200; index += 1) viewport = zoomViewportAt(viewport, 0, 0, -100);
     expect(viewport.zoom).toBe(4);
+  });
+
+  it("centers an existing box without changing the zoom level", () => {
+    const viewport = centerViewportOnRect(
+      { panX: 0, panY: 0, zoom: 1.5 },
+      { column: 10, row: 4, width: 6, height: 8 },
+      1200,
+      800,
+      32,
+    );
+    expect(viewport).toEqual({ panX: -24, panY: 16, zoom: 1.5 });
   });
 });

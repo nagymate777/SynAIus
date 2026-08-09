@@ -97,7 +97,8 @@
 }
 
 .thread-stream-filters button,
-.thread-stream-latest {
+.thread-stream-latest,
+.thread-stream-artifacts-toggle {
   flex: 0 0 auto;
   padding: 0.25rem 0.42rem;
   border: 1px solid #36535b;
@@ -120,6 +121,12 @@
   color: #a9def0;
 }
 
+.thread-stream-artifacts-toggle[aria-pressed="true"] {
+  border-color: #4b8f87;
+  background: #14332f;
+  color: #b9e8df;
+}
+
 .thread-stream-compose[hidden] {
   display: none;
 }
@@ -132,6 +139,106 @@
   flex-direction: column;
   gap: 0.4rem;
   padding: 0.2rem;
+}
+
+.thread-stream-artifacts {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.4rem;
+  padding: 0.2rem;
+}
+
+.thread-stream-artifacts > header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.thread-stream-artifacts > header input {
+  min-width: 0;
+  flex: 1;
+  padding: 0.38rem 0.48rem;
+  border: 1px solid #36535b;
+  border-radius: 0.35rem;
+  background: #07171d;
+  color: inherit;
+}
+
+.thread-stream-artifacts > header span {
+  color: #83aaa6;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.thread-stream-artifact-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 0.38rem;
+}
+
+.thread-stream-artifact-list > article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.48rem 0.55rem;
+  border: 1px solid #29454d;
+  border-left: 0.2rem solid #72838a;
+  border-radius: 0.42rem;
+  background: rgb(6 20 26 / 88%);
+}
+
+.thread-stream-artifact-list > article[data-kind="add"] {
+  border-left-color: #58b88e;
+}
+
+.thread-stream-artifact-list > article[data-kind="update"] {
+  border-left-color: #5e9fc0;
+}
+
+.thread-stream-artifact-list > article[data-kind="delete"] {
+  border-left-color: #c16c72;
+}
+
+.thread-stream-artifact-list article > div {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.thread-stream-artifact-list strong,
+.thread-stream-artifact-list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-stream-artifact-list strong {
+  color: #c2dedb;
+  font-size: 0.76rem;
+}
+
+.thread-stream-artifact-list code,
+.thread-stream-artifact-list small,
+.thread-stream-artifact-list article > span {
+  color: #809b9b;
+  font-size: 0.64rem;
+}
+
+.thread-stream-artifact-list button {
+  white-space: nowrap;
+}
+
+.thread-stream-artifact-list > p {
+  margin: 1rem;
+  color: #91aaa8;
+  text-align: center;
 }
 
 .thread-stream-new {

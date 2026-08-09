@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ContentInstance, ContentRendererDefinition, JsonObject } from "@synaius/content";
 import { createTranslator, type TranslationDictionary } from "@synaius/i18n";
-import type { ArtifactDocument, ArtifactGateway } from "@synaius/protocol";
+import type { ArtifactDocument, ArtifactFileEntry, ArtifactGateway } from "@synaius/protocol";
 import type { WorkspaceContentRenderContext } from "@synaius/workspace-ui";
 import {
   ARTIFACT_VIEWER_CONTENT_TYPE,
@@ -39,26 +39,35 @@ function ArtifactViewer({
 }) {
   const configuration = readConfiguration(content.configuration);
   const [document, setDocument] = useState<ArtifactDocument | null>(null);
+  const [fileEntry, setFileEntry] = useState<ArtifactFileEntry | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
+  const [viewMode, setViewMode] = useState<"current" | "diff">("current");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setErrorKey(null);
-    gateway.readThreadFile(configuration.threadId, configuration.path)
-      .then((nextDocument) => {
-        if (!cancelled) setDocument(nextDocument);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setDocument(null);
-        setErrorKey(artifactErrorKey(error instanceof Error ? error.message : ""));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    Promise.allSettled([
+      gateway.readThreadFile(configuration.threadId, configuration.path),
+      gateway.listThreadFiles(configuration.threadId),
+    ]).then(([documentResult, indexResult]) => {
+      if (cancelled) return;
+      const nextDocument = documentResult.status === "fulfilled" ? documentResult.value : null;
+      const nextEntry = indexResult.status === "fulfilled"
+        ? indexResult.value.files.find((file) => sameArtifactPath(file.path, configuration.path)) ?? null
+        : null;
+      setDocument(nextDocument);
+      setFileEntry(nextEntry);
+      setErrorKey(nextDocument ? null : artifactErrorKey(
+        documentResult.status === "rejected" && documentResult.reason instanceof Error
+          ? documentResult.reason.message
+          : "",
+      ));
+      setViewMode(nextDocument ? "current" : nextEntry?.diff ? "diff" : "current");
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
@@ -68,12 +77,32 @@ function ArtifactViewer({
     <section className="artifact-viewer">
       <header className="artifact-viewer-header">
         <div>
-          <strong>{document?.name ?? configuration.path}</strong>
-          <code>{document?.path ?? configuration.path}</code>
+          <strong>{document?.name ?? fileEntry?.name ?? configuration.path}</strong>
+          <code>{document?.path ?? fileEntry?.path ?? configuration.path}</code>
         </div>
-        <button disabled={loading} onClick={() => setReload((value) => value + 1)} type="button">
-          {t("module.artifact-viewer.action.reload")}
-        </button>
+        <div className="artifact-viewer-actions">
+          <div aria-label={t("module.artifact-viewer.view.label")} role="group">
+            <button
+              aria-pressed={viewMode === "current"}
+              disabled={!document}
+              onClick={() => setViewMode("current")}
+              type="button"
+            >
+              {t("module.artifact-viewer.view.current")}
+            </button>
+            <button
+              aria-pressed={viewMode === "diff"}
+              disabled={!fileEntry?.diff}
+              onClick={() => setViewMode("diff")}
+              type="button"
+            >
+              {t("module.artifact-viewer.view.diff")}
+            </button>
+          </div>
+          <button disabled={loading} onClick={() => setReload((value) => value + 1)} type="button">
+            {t("module.artifact-viewer.action.reload")}
+          </button>
+        </div>
       </header>
       <div className="artifact-viewer-meta">
         {document && (
@@ -82,22 +111,47 @@ function ArtifactViewer({
             <span>{t("module.artifact-viewer.size", { size: formatSize(document.size, t) })}</span>
           </>
         )}
+        {fileEntry && (
+          <>
+            <span>{t(artifactChangeKindKey(fileEntry.changeKind))}</span>
+            <span>{t("module.artifact-viewer.changeCount", { count: fileEntry.occurrences })}</span>
+          </>
+        )}
       </div>
       <div className="artifact-viewer-body">
         {loading && <p>{t("module.artifact-viewer.loading")}</p>}
-        {!loading && errorKey && <p role="alert">{t(errorKey)}</p>}
-        {!loading && document?.kind === "text" && <pre>{document.content}</pre>}
-        {!loading && document?.kind === "markdown" && (
+        {!loading && viewMode === "current" && errorKey && <p role="alert">{t(errorKey)}</p>}
+        {!loading && viewMode === "current" && document?.kind === "text" && (
+          <LineNumberedCode value={document.content} />
+        )}
+        {!loading && viewMode === "current" && document?.kind === "markdown" && (
           <MarkdownDocument value={document.content} />
         )}
-        {!loading && document?.kind === "image" && (
+        {!loading && viewMode === "current" && document?.kind === "image" && (
           <img
             alt={document.name}
             src={`data:${document.mimeType};base64,${document.content}`}
           />
         )}
+        {!loading && viewMode === "diff" && fileEntry?.diff && (
+          <LineNumberedCode diff value={fileEntry.diff} />
+        )}
       </div>
     </section>
+  );
+}
+
+function LineNumberedCode({ value, diff = false }: { value: string; diff?: boolean }) {
+  const lines = value.split(/\r?\n/);
+  return (
+    <div className="artifact-viewer-code" data-diff={diff}>
+      {lines.map((line, index) => (
+        <div data-kind={diff ? diffLineKind(line) : undefined} key={`${index}:${line}`}>
+          <span aria-hidden="true">{index + 1}</span>
+          <code>{line || "\u00a0"}</code>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -179,6 +233,32 @@ function artifactKindKey(kind: ArtifactDocument["kind"]) {
     image: "module.artifact-viewer.kind.image",
   };
   return keys[kind];
+}
+
+function artifactChangeKindKey(kind: ArtifactFileEntry["changeKind"]) {
+  const keys: Record<ArtifactFileEntry["changeKind"], string> = {
+    add: "module.artifact-viewer.change.add",
+    update: "module.artifact-viewer.change.update",
+    delete: "module.artifact-viewer.change.delete",
+    unknown: "module.artifact-viewer.change.unknown",
+  };
+  return keys[kind];
+}
+
+function diffLineKind(line: string) {
+  if (line.startsWith("@@")) return "range";
+  if (line.startsWith("+") && !line.startsWith("+++")) return "add";
+  if (line.startsWith("-") && !line.startsWith("---")) return "delete";
+  return "context";
+}
+
+function sameArtifactPath(left: string, right: string) {
+  const normalizedLeft = left.replaceAll("\\", "/");
+  const normalizedRight = right.replaceAll("\\", "/");
+  if (/^[a-z]:\//i.test(normalizedLeft) || /^[a-z]:\//i.test(normalizedRight)) {
+    return normalizedLeft.toLocaleLowerCase() === normalizedRight.toLocaleLowerCase();
+  }
+  return normalizedLeft === normalizedRight;
 }
 
 function artifactErrorKey(code: string) {
