@@ -28,7 +28,11 @@ import {
   type ThreadTurnGroup,
 } from "./activity.ts";
 import { projectThreadArtifactFiles } from "./artifact-index.ts";
-import { THREAD_STREAM_CONTENT_TYPE, THREAD_STREAM_RENDERER_VERSION } from "./index";
+import {
+  THREAD_STREAM_CONTENT_TYPE,
+  THREAD_STREAM_RENDERER_VERSION,
+  threadStreamModuleManifest,
+} from "./index";
 import "./thread-stream.css";
 
 export {
@@ -85,6 +89,15 @@ export function createThreadStreamRenderer(
     moduleId: "thread-stream",
     version: THREAD_STREAM_RENDERER_VERSION,
     titleKey: "module.thread-stream.title",
+    catalog: {
+      descriptionKey: "module.thread-stream.catalog.description",
+      defaultBoxNameKey: "module.thread-stream.defaultBoxName",
+      defaultWidth: 18,
+      defaultHeight: 16,
+      initialConfiguration: { threadId: null },
+      requiredPermissions: threadStreamModuleManifest.permissions,
+      fields: [],
+    },
     validateConfiguration: isThreadStreamConfiguration,
     render: (instance, context) => (
       <ThreadStreamPanel

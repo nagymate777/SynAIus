@@ -49,4 +49,84 @@ describe("content renderer contract", () => {
     registry.register(definition);
     expect(() => registry.register(definition)).toThrowError(new ContentContractError("content.renderer.duplicate"));
   });
+
+  it("publishes only the latest catalog entry as immutable declarative metadata", () => {
+    const registry = createContentRegistry();
+    const common = {
+      type: "core.note",
+      moduleId: "core",
+      titleKey: "core.content.note.title",
+      validateConfiguration: () => true,
+      render: () => null,
+    };
+    registry.register({
+      ...common,
+      version: 1,
+      catalog: {
+        descriptionKey: "core.content.note.description",
+        defaultBoxNameKey: "core.content.note.defaultName",
+        defaultWidth: 6,
+        defaultHeight: 4,
+        initialConfiguration: { text: "" },
+        requiredPermissions: [],
+        fields: [{
+          key: "text",
+          labelKey: "core.content.note.text",
+          input: "textarea" as const,
+          required: false,
+        }],
+      },
+    });
+    registry.register({
+      ...common,
+      version: 2,
+      catalog: {
+        descriptionKey: "core.content.note.description",
+        defaultBoxNameKey: "core.content.note.defaultName",
+        defaultWidth: 8,
+        defaultHeight: 5,
+        initialConfiguration: { text: "" },
+        requiredPermissions: ["note.read"],
+        fields: [{
+          key: "text",
+          labelKey: "core.content.note.text",
+          input: "textarea" as const,
+          required: true,
+        }],
+      },
+    });
+
+    const catalog = registry.listCatalog();
+    expect(catalog).toHaveLength(1);
+    expect(catalog[0]).toMatchObject({ version: 2, catalog: { defaultWidth: 8 } });
+    expect(Object.isFrozen(catalog[0]?.catalog)).toBe(true);
+    expect(Object.isFrozen(catalog[0]?.catalog.initialConfiguration)).toBe(true);
+    expect(Object.isFrozen(catalog[0]?.catalog.fields[0])).toBe(true);
+  });
+
+  it("rejects catalog fields that are not represented by string configuration values", () => {
+    const registry = createContentRegistry();
+    expect(() => registry.register({
+      type: "core.invalid",
+      moduleId: "core",
+      version: 1,
+      titleKey: "core.content.invalid.title",
+      catalog: {
+        descriptionKey: "core.content.invalid.description",
+        defaultBoxNameKey: "core.content.invalid.defaultName",
+        defaultWidth: 4,
+        defaultHeight: 4,
+        initialConfiguration: {},
+        requiredPermissions: [],
+        fields: [{
+          key: "value",
+          labelKey: "core.content.invalid.value",
+          input: "text",
+          required: true,
+        }],
+      },
+      validateConfiguration: () => true,
+      render: () => null,
+    })).toThrowError(new ContentContractError("content.catalog.field.configuration.invalid"));
+  });
 });

@@ -6,6 +6,7 @@ import type { WorkspaceContentRenderContext } from "@synaius/workspace-ui";
 import {
   ARTIFACT_VIEWER_CONTENT_TYPE,
   ARTIFACT_VIEWER_RENDERER_VERSION,
+  artifactViewerModuleManifest,
 } from "./index.ts";
 import "./artifact-viewer.css";
 
@@ -23,6 +24,30 @@ export function createArtifactViewerRenderer(
     moduleId: "artifact-viewer",
     version: ARTIFACT_VIEWER_RENDERER_VERSION,
     titleKey: "module.artifact-viewer.title",
+    catalog: {
+      descriptionKey: "module.artifact-viewer.catalog.description",
+      defaultBoxNameKey: "module.artifact-viewer.manualBoxName",
+      defaultWidth: 14,
+      defaultHeight: 12,
+      initialConfiguration: { provider: "thread-file", threadId: "", path: "" },
+      requiredPermissions: artifactViewerModuleManifest.permissions,
+      fields: [
+        {
+          key: "threadId",
+          labelKey: "module.artifact-viewer.catalog.threadId.label",
+          placeholderKey: "module.artifact-viewer.catalog.threadId.placeholder",
+          input: "text",
+          required: true,
+        },
+        {
+          key: "path",
+          labelKey: "module.artifact-viewer.catalog.path.label",
+          placeholderKey: "module.artifact-viewer.catalog.path.placeholder",
+          input: "text",
+          required: true,
+        },
+      ],
+    },
     validateConfiguration: isArtifactViewerConfiguration,
     render: (instance) => <ArtifactViewer content={instance} gateway={options.gateway} t={t} />,
   };

@@ -12,7 +12,7 @@ export const OPERAI_THREAD_STREAM_BOX_ID = "box:operai-thread-stream";
 export function initializeOperaiWorkspace(initial: WorkspaceState) {
   if (initial.contents[OPERAI_THREAD_STREAM_CONTENT_ID]) return initial;
 
-  let workspace = execute(initial, "content.create", {
+  return execute(initial, "content.box.create", {
     content: {
       id: OPERAI_THREAD_STREAM_CONTENT_ID,
       type: THREAD_STREAM_CONTENT_TYPE,
@@ -21,17 +21,11 @@ export function initializeOperaiWorkspace(initial: WorkspaceState) {
       requiredPermissions: [...threadStreamModuleManifest.permissions],
       sourceNodeId: null,
     },
-  });
-  workspace = execute(workspace, "box.create", {
     boxId: OPERAI_THREAD_STREAM_BOX_ID,
-    viewId: workspace.activeViewId,
+    viewId: initial.activeViewId,
     parentId: null,
     name: hu["module.thread-stream.defaultBoxName"],
     rect: { column: 0, row: 4, width: 18, height: 16 },
-  });
-  return execute(workspace, "box.content.attach", {
-    boxId: OPERAI_THREAD_STREAM_BOX_ID,
-    contentId: OPERAI_THREAD_STREAM_CONTENT_ID,
   });
 }
 

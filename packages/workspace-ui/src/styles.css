@@ -342,7 +342,8 @@ button:disabled {
 }
 
 .context-stack,
-.snapshot-list {
+.snapshot-list,
+.content-catalog-list {
   display: grid;
   gap: 0.35rem;
 }
@@ -352,6 +353,24 @@ button:disabled {
 .file-input-label {
   width: 100%;
   text-align: left;
+}
+
+.content-catalog-list {
+  margin-bottom: 0.5rem;
+}
+
+.content-catalog-option {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.7rem;
+  text-align: left;
+}
+
+.content-catalog-option span {
+  color: #9aa8ba;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .snapshot-list {

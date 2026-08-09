@@ -9,7 +9,11 @@ import type {
   ReactNode,
 } from "react";
 import type { SynAIusApplicationManifest } from "@synaius/application";
-import type { ContentRegistry } from "@synaius/content";
+import type {
+  CatalogContentRendererDefinition,
+  ContentRegistry,
+  JsonObject,
+} from "@synaius/content";
 import {
   applyWorkspaceCommand,
   createWorkspace,
@@ -66,7 +70,17 @@ import {
 } from "./canvas-viewport";
 
 type DragMode = "move" | "resize-start" | "resize-end";
-type ContextMode = "actions" | "rename" | "label" | "delete" | "add-layout" | "delete-layout" | "copy-layout" | "snapshots" | "import";
+type ContextMode =
+  | "actions"
+  | "rename"
+  | "label"
+  | "delete"
+  | "add-layout"
+  | "delete-layout"
+  | "copy-layout"
+  | "content-picker"
+  | "snapshots"
+  | "import";
 type ClipboardMode = "cut" | "clone";
 
 interface DragState {
@@ -103,6 +117,8 @@ interface ContextState {
   draftName: string;
   draftLabel: string;
   sourceLayoutId: LayoutId;
+  contentType: string | null;
+  contentValues: Record<string, string>;
   errorKey: string | null;
 }
 
@@ -130,6 +146,7 @@ export interface WorkspaceApplicationProps {
 
 export function WorkspaceApplication({ application, contentRegistry, initializeWorkspace }: WorkspaceApplicationProps) {
   const t = useMemo(() => createTranslator(application.localeMessages), [application]);
+  const contentCatalog = useMemo(() => contentRegistry?.listCatalog() ?? [], [contentRegistry]);
   const deviceNames = useMemo<DeviceNames>(() => ({
     desktop: t("workspace.device.desktop"),
     tablet: t("workspace.device.tablet"),
@@ -424,6 +441,9 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     [visibleBoxes, visibleBoxIds],
   );
   const contextBox = context?.boxId ? workspace.boxes[context.boxId] : null;
+  const selectedContentDefinition = context?.contentType
+    ? contentCatalog.find((definition) => definition.type === context.contentType) ?? null
+    : null;
   const contextBoxHasChildren = contextBox
     ? Object.values(workspace.boxes).some((box) => box.parentId === contextBox.id)
     : false;
@@ -491,6 +511,98 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     setContext(null);
   }
 
+  function openContentPicker() {
+    if (!context || contentCatalog.length === 0) return;
+    setContext({
+      ...context,
+      mode: "content-picker",
+      draftName: "",
+      contentType: null,
+      contentValues: {},
+      errorKey: null,
+    });
+  }
+
+  function selectContentType(definition: CatalogContentRendererDefinition<ReactNode, WorkspaceContentRenderContext>) {
+    if (!context) return;
+    const occupiedNames = Object.values(workspace.boxes).map((box) => box.name);
+    const defaultName = t(definition.catalog.defaultBoxNameKey);
+    setContext({
+      ...context,
+      contentType: definition.type,
+      draftName: nextAvailableLiteralName(t, defaultName, occupiedNames),
+      contentValues: Object.fromEntries(definition.catalog.fields.map((field) => [
+        field.key,
+        String(definition.catalog.initialConfiguration[field.key] ?? ""),
+      ])),
+      errorKey: null,
+    });
+  }
+
+  function addContentBox(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!context || !contentRegistry || !context.contentType) return;
+    const definition = contentCatalog.find((entry) => entry.type === context.contentType);
+    if (!definition) {
+      setContext({ ...context, errorKey: "workspace.content.error.invalid" });
+      return;
+    }
+    const name = context.draftName.trim();
+    if (!name) {
+      setContext({ ...context, errorKey: "workspace.content.error.required" });
+      return;
+    }
+    const duplicate = Object.values(workspace.boxes).some((box) =>
+      box.name.localeCompare(name, "hu", { sensitivity: "base" }) === 0);
+    if (duplicate) {
+      setContext({ ...context, errorKey: "workspace.content.error.duplicateName" });
+      return;
+    }
+    if (definition.catalog.fields.some((field) => field.required && !context.contentValues[field.key]?.trim())) {
+      setContext({ ...context, errorKey: "workspace.content.error.required" });
+      return;
+    }
+
+    const configuration = structuredClone(definition.catalog.initialConfiguration) as JsonObject;
+    for (const field of definition.catalog.fields) {
+      configuration[field.key] = context.contentValues[field.key]?.trim() ?? "";
+    }
+    try {
+      const instance = contentRegistry.createInstance({
+        id: `content:${crypto.randomUUID()}`,
+        type: definition.type,
+        rendererVersion: definition.version,
+        configuration,
+        requiredPermissions: [...definition.catalog.requiredPermissions],
+        sourceNodeId: null,
+      });
+      const { revision: _revision, ...content } = instance;
+      const parentId = contextBox?.role.type === "content" ? contextBox.id : null;
+      const point = parentId ? { column: 0, row: 0 } : context.point;
+      commitWorkspace((current) => applyWorkspaceCommand(current, {
+        id: crypto.randomUUID(),
+        expectedRevision: current.revision,
+        type: "content.box.create",
+        payload: {
+          content,
+          boxId: `box:${crypto.randomUUID()}`,
+          viewId: current.activeViewId,
+          parentId,
+          name,
+          rect: rectAtPoint(
+            point,
+            definition.catalog.defaultWidth,
+            definition.catalog.defaultHeight,
+            parentId ? current.boxes[parentId]?.childGrid.columns ?? null : null,
+          ),
+        },
+      }).state);
+      setContext(null);
+    } catch {
+      setContext({ ...context, errorKey: "workspace.content.error.invalid" });
+    }
+  }
+
   function openCanvasContext(event: ReactMouseEvent<HTMLElement>) {
     event.preventDefault();
     if (suppressContextMenuRef.current) {
@@ -507,6 +619,8 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
       draftName: "",
       draftLabel: "",
       sourceLayoutId: workspace.activeLayout,
+      contentType: null,
+      contentValues: {},
       errorKey: null,
     });
   }
@@ -528,6 +642,8 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
       draftName: box.name,
       draftLabel: localizedBoxLabel(workspace, box),
       sourceLayoutId: workspace.activeLayout,
+      contentType: null,
+      contentValues: {},
       errorKey: null,
     });
   }
@@ -919,7 +1035,16 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
                       contextBox?.role.type === "content" ? { column: 0, row: 0 } : context.point,
                     )}
                   >
-                    {t(contextBox?.role.type === "content" ? "workspace.context.addInside" : "workspace.action.addBox")}
+                    {t(contextBox?.role.type === "content"
+                      ? "workspace.context.addEmptyInside"
+                      : "workspace.action.addEmptyBox")}
+                  </button>
+                )}
+                {workspace.preferences.handlesVisible && contentCatalog.length > 0 && (
+                  <button role="menuitem" onClick={openContentPicker}>
+                    {t(contextBox?.role.type === "content"
+                      ? "workspace.context.addContentInside"
+                      : "workspace.action.addContentBox")}
                   </button>
                 )}
                 {workspace.preferences.handlesVisible && (
@@ -1072,6 +1197,93 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
                   </>
                 )}
               </>
+            )}
+
+            {context.mode === "content-picker" && (
+              selectedContentDefinition ? (
+                <form onSubmit={addContentBox}>
+                  <p>{t("workspace.content.configure", {
+                    type: t(selectedContentDefinition.titleKey),
+                  })}</p>
+                  <label htmlFor="content-box-name">{t("workspace.content.boxName")}</label>
+                  <input
+                    id="content-box-name"
+                    autoFocus
+                    value={context.draftName}
+                    onChange={(event) => setContext({
+                      ...context,
+                      draftName: event.target.value,
+                      errorKey: null,
+                    })}
+                  />
+                  {selectedContentDefinition.catalog.fields.map((field) => (
+                    <label key={field.key} htmlFor={`content-field-${field.key}`}>
+                      {t(field.labelKey)}
+                      {field.input === "textarea" ? (
+                        <textarea
+                          id={`content-field-${field.key}`}
+                          rows={3}
+                          required={field.required}
+                          placeholder={field.placeholderKey ? t(field.placeholderKey) : undefined}
+                          value={context.contentValues[field.key] ?? ""}
+                          onChange={(event) => setContext({
+                            ...context,
+                            contentValues: { ...context.contentValues, [field.key]: event.target.value },
+                            errorKey: null,
+                          })}
+                        />
+                      ) : (
+                        <input
+                          id={`content-field-${field.key}`}
+                          required={field.required}
+                          placeholder={field.placeholderKey ? t(field.placeholderKey) : undefined}
+                          value={context.contentValues[field.key] ?? ""}
+                          onChange={(event) => setContext({
+                            ...context,
+                            contentValues: { ...context.contentValues, [field.key]: event.target.value },
+                            errorKey: null,
+                          })}
+                        />
+                      )}
+                    </label>
+                  ))}
+                  {context.errorKey && <p className="context-error">{t(context.errorKey)}</p>}
+                  <div className="context-actions">
+                    <button type="submit">{t("workspace.content.create")}</button>
+                    <button
+                      type="button"
+                      onClick={() => setContext({
+                        ...context,
+                        contentType: null,
+                        draftName: "",
+                        contentValues: {},
+                        errorKey: null,
+                      })}
+                    >
+                      {t("workspace.action.back")}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div>
+                  <p>{t("workspace.content.choose")}</p>
+                  <div className="content-catalog-list">
+                    {contentCatalog.map((definition) => (
+                      <button
+                        className="content-catalog-option"
+                        key={definition.type}
+                        onClick={() => selectContentType(definition)}
+                      >
+                        <strong>{t(definition.titleKey)}</strong>
+                        <span>{t(definition.catalog.descriptionKey)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => setContext({ ...context, mode: "actions" })}>
+                    {t("workspace.action.cancel")}
+                  </button>
+                </div>
+              )
             )}
 
             {context.mode === "rename" && contextBox && (
@@ -1302,6 +1514,22 @@ function nextAvailableName(
   let count = 1;
   while (canonicalNames.has(t(key, { count }).toLocaleLowerCase("hu-HU"))) count += 1;
   return t(key, { count });
+}
+
+function nextAvailableLiteralName(
+  t: ReturnType<typeof createTranslator>,
+  defaultName: string,
+  occupiedNames: string[],
+) {
+  const canonicalNames = new Set(occupiedNames.map((name) => name.toLocaleLowerCase("hu-HU")));
+  if (!canonicalNames.has(defaultName.toLocaleLowerCase("hu-HU"))) return defaultName;
+  let count = 2;
+  let candidate = t("workspace.content.boxNameNumbered", { name: defaultName, count });
+  while (canonicalNames.has(candidate.toLocaleLowerCase("hu-HU"))) {
+    count += 1;
+    candidate = t("workspace.content.boxNameNumbered", { name: defaultName, count });
+  }
+  return candidate;
 }
 
 function menuPosition(clientX: number, clientY: number) {
