@@ -99,6 +99,8 @@ describe("thread stream service", () => {
     const attached = await service.attachThread("thread-1");
     expect(attached.accessMode).toBe("observe");
     expect(store.eventsAfter("thread-1").at(-1)?.method).toBe("gateway/readOnlyAttached");
+    expect((await service.attachThread("thread-1")).accessMode).toBe("observe");
+    expect(client.resumeAttempts).toBe(1);
 
     client.currentSnapshot = {
       ...snapshot("thread-1"),
@@ -122,6 +124,7 @@ class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerC
   connectionId: string | null = null;
   startCount = 0;
   resumed: string[] = [];
+  resumeAttempts = 0;
   activeWriter = false;
   currentSnapshot: ThreadSnapshot | null = null;
 
@@ -146,6 +149,7 @@ class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerC
   }
 
   async resumeThread(threadId: string) {
+    this.resumeAttempts += 1;
     if (this.activeWriter) throw new Error(`thread ${threadId} already has an active writer`);
     this.resumed.push(threadId);
     return snapshot(threadId);

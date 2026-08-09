@@ -182,6 +182,13 @@ export class ThreadStreamService {
 
   async attachThread(threadId: string): Promise<ThreadSnapshot> {
     this.store.attachThread(threadId);
+    if (this.observeOnlyThreadIds.has(threadId)) {
+      const cached = this.store.readSnapshot(threadId);
+      if (cached) {
+        this.startPolling(threadId);
+        return cached;
+      }
+    }
     if (this.client.connected) {
       try {
         return await this.resumeThread(threadId);
