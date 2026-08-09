@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => {
       allowedHosts: [".ts.net"],
       proxy: {
         "/api/thread-stream": bridgeTarget,
+        "/api/workspace-control": bridgeTarget,
       },
     } : undefined,
     test: {

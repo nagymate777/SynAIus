@@ -55,6 +55,32 @@ button:disabled {
   min-height: 100vh;
 }
 
+.workspace-control-status {
+  position: fixed;
+  z-index: 80;
+  top: 0.65rem;
+  right: 0.75rem;
+  max-width: min(22rem, calc(100vw - 1.5rem));
+  padding: 0.35rem 0.65rem;
+  border: 1px solid #87a2c7;
+  border-radius: 999px;
+  background: rgb(238 245 255 / 92%);
+  color: #294b78;
+  font-size: 0.72rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.portal-shell[data-control-status="error"] .workspace-control-status {
+  border-color: #c89b3c;
+  background: rgb(255 248 221 / 94%);
+  color: #725714;
+}
+
+.portal-shell[data-control-ready="false"] .canvas {
+  pointer-events: none;
+}
+
 .canvas {
   --cell-size: 32px;
   position: relative;

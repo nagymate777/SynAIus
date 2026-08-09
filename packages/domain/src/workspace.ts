@@ -1,4 +1,5 @@
 import type { ContentInstance, JsonObject } from "@synaius/content";
+import { isWorkspaceState } from "./workspace-validation.ts";
 
 export type BuiltInDeviceKind = "desktop" | "tablet" | "mobile";
 
@@ -214,6 +215,7 @@ interface CommandEnvelope<TType extends string, TPayload> {
 }
 
 export type WorkspaceCommand =
+  | CommandEnvelope<"workspace.restore", { workspace: WorkspaceState }>
   | CommandEnvelope<"view.create", { viewId: string; name: string }>
   | CommandEnvelope<"view.activate", { viewId: string }>
   | CommandEnvelope<"view.setLayoutDefault", { layoutId: LayoutId; viewId: string }>
@@ -265,8 +267,11 @@ export interface CommandResult {
 }
 
 export class DomainError extends Error {
-  constructor(public readonly code: string) {
+  readonly code: string;
+
+  constructor(code: string) {
     super(code);
+    this.code = code;
   }
 }
 
@@ -616,6 +621,14 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
   const state = structuredClone(current);
 
   switch (command.type) {
+    case "workspace.restore": {
+      const restored: unknown = structuredClone(command.payload.workspace);
+      if (!isWorkspaceState(restored) || restored.id !== current.id) {
+        throw new DomainError("workspace.restore.invalid");
+      }
+      Object.assign(state, restored, { revision: current.revision });
+      break;
+    }
     case "view.create": {
       requiredId(command.payload.viewId);
       if (state.views[command.payload.viewId]) throw new DomainError("view.id.duplicate");
@@ -964,6 +977,8 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       if (command.payload.scopedCss !== undefined) box.style.scopedCss = command.payload.scopedCss;
       break;
     }
+    default:
+      throw new DomainError("workspace.command.unsupported");
   }
 
   state.revision += 1;

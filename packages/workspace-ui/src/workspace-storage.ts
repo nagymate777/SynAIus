@@ -6,6 +6,7 @@ import {
   migrateWorkspaceV5,
   migrateWorkspaceV6,
   migrateWorkspaceV7,
+  isWorkspaceState as isDomainWorkspaceState,
   type BuiltInDeviceKind,
   type BoxNode,
   type CloneNameTemplates,
@@ -104,37 +105,7 @@ export function saveWorkspace(workspace: WorkspaceState, storageNamespace = "syn
 }
 
 export function isWorkspaceState(value: unknown): value is WorkspaceState {
-  if (!isWorkspaceBase(value) || value.schemaVersion !== 8 || typeof value.activeLayout !== "string") return false;
-  if (!isDeviceLayouts(value.layouts) || !isLayoutOrder(value.layoutOrder, value.layouts)) return false;
-  const layouts = value.layouts;
-  if (!BUILT_IN_DEVICE_KINDS.every((layoutId) => layouts[layoutId]?.builtIn)
-    || Object.values(layouts).some((layout) =>
-      layout.builtIn && !BUILT_IN_DEVICE_KINDS.includes(layout.id as BuiltInDeviceKind))) return false;
-  if (!Object.prototype.hasOwnProperty.call(layouts, value.activeLayout)) return false;
-  if (!hasCompleteLayoutDefaults(value, layouts) || !isWorkspacePreferences(value.preferences)) return false;
-  const localeMessages = value.localeMessages;
-  if (!isStringRecord(localeMessages)
-    || typeof localeMessages["workspace.box.cloneName"] !== "string"
-    || typeof localeMessages["workspace.box.cloneNameNumbered"] !== "string") return false;
-  if (!isRecord(value.contents)
-    || !Object.entries(value.contents).every(([contentId, content]) => isContentInstance(content) && content.id === contentId)) return false;
-
-  const layoutIds = Object.keys(layouts);
-  const boxes = Object.values(value.boxes);
-  if (!boxes.every((box) => isBoxNode(box, layoutIds))) return false;
-  const typedBoxes = boxes as BoxNode[];
-  const candidate = value as unknown as WorkspaceState;
-  return typedBoxes.every((box) => referencesAreValid(candidate, box)
-    && boxRoleReferenceIsValid(candidate, box)
-    && cloneReferenceIsValid(candidate, box)
-    && (box.role.type === "content"
-      ? box.labelKey === null
-      : box.contentId === null
-        && typeof box.labelKey === "string"
-        && typeof localeMessages[box.labelKey] === "string")
-    && (box.contentId === null || Object.prototype.hasOwnProperty.call(candidate.contents, box.contentId)))
-    && layoutsHaveValidControls(candidate)
-    && permissionGrantsAreValid(candidate);
+  return isDomainWorkspaceState(value);
 }
 
 export function isLegacyWorkspaceStateV7(value: unknown): value is LegacyWorkspaceStateV7 {

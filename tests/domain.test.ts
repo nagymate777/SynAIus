@@ -65,6 +65,40 @@ describe("workspace command core", () => {
     })).toThrowError(new DomainError("workspace.revision.conflict"));
   });
 
+  it("restores a validated workspace through the same revisioned command layer", () => {
+    const baseline = initial();
+    let state = apply(baseline, {
+      type: "box.create",
+      payload: {
+        boxId: "temporary",
+        viewId: "main",
+        parentId: null,
+        name: "Ideiglenes",
+        rect: { column: 0, row: 4, width: 6, height: 4 },
+      },
+    });
+    state = apply(state, {
+      type: "workspace.restore",
+      payload: { workspace: baseline },
+    });
+    expect(state.boxes.temporary).toBeUndefined();
+    expect(state.revision).toBe(2);
+
+    expect(() => apply(state, {
+      type: "workspace.restore",
+      payload: { workspace: { ...baseline, id: "other-workspace" } },
+    })).toThrowError(new DomainError("workspace.restore.invalid"));
+  });
+
+  it("fails closed for an unsupported runtime command type", () => {
+    expect(() => applyWorkspaceCommand(initial(), {
+      id: "unknown-command",
+      expectedRevision: 0,
+      type: "workspace.unknown",
+      payload: {},
+    } as unknown as WorkspaceCommand)).toThrowError(new DomainError("workspace.command.unsupported"));
+  });
+
   it("rejects duplicate content permission declarations", () => {
     expect(() => apply(initial(), {
       type: "content.create",

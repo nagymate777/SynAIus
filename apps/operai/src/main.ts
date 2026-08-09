@@ -12,6 +12,7 @@ import { createWebPanelRenderer } from "@synaius/module-web-panel/renderer";
 import { createTranslator } from "@synaius/i18n";
 import { mountWorkspaceApplication, type WorkspaceContentRenderContext } from "@synaius/workspace-ui";
 import type { ReactNode } from "react";
+import { BrowserWorkspaceControlGateway } from "@synaius/workspace-control/client";
 import hu from "../../../locales/hu.json";
 import { operaiApplication } from "./application";
 import { initializeOperaiWorkspace } from "./workspace";
@@ -47,4 +48,5 @@ contentRegistry.register(createThreadStreamRenderer({
 mountWorkspaceApplication(root, operaiApplication, {
   contentRegistry,
   initializeWorkspace: initializeOperaiWorkspace,
+  workspaceControl: new BrowserWorkspaceControlGateway(),
 });

@@ -10,13 +10,17 @@ export interface ThreadStreamHttpServerOptions {
   service: ThreadStreamService;
   host?: string;
   port?: number;
+  additionalRoute?: (
+    request: IncomingMessage,
+    response: ServerResponse,
+  ) => boolean | Promise<boolean>;
 }
 
 export function createThreadStreamHttpServer(options: ThreadStreamHttpServerOptions) {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 4311;
   const server = createServer((request, response) => {
-    void route(options.service, request, response).catch((error) => {
+    void route(options.service, request, response, options.additionalRoute).catch((error) => {
       if (response.headersSent) {
         response.end();
         return;
@@ -51,6 +55,7 @@ async function route(
   service: ThreadStreamService,
   request: IncomingMessage,
   response: ServerResponse,
+  additionalRoute?: ThreadStreamHttpServerOptions["additionalRoute"],
 ) {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method === "GET" && url.pathname === "/healthz") {
@@ -193,6 +198,7 @@ async function route(
     );
   }
 
+  if (additionalRoute && await additionalRoute(request, response)) return;
   writeJson(response, 404, { error: "thread-stream.route.notFound" });
 }
 
@@ -234,10 +240,15 @@ function streamThread(
     .forEach((event) => writeSseEvent(response, event));
 
   const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
-  request.on("close", () => {
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
     clearInterval(heartbeat);
     unsubscribe();
-  });
+  };
+  response.on("close", close);
+  request.on("aborted", close);
 }
 
 function writeSseEvent(response: ServerResponse, event: DurableThreadEvent) {

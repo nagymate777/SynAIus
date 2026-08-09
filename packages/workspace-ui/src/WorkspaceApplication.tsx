@@ -30,6 +30,10 @@ import {
   type WorkspaceState,
 } from "@synaius/domain";
 import { createTranslator } from "@synaius/i18n";
+import type {
+  DurableWorkspaceEvent,
+  WorkspaceControlGateway,
+} from "@synaius/workspace-control";
 import {
   gridDeltaFromClient,
   gridPointFromClient,
@@ -55,7 +59,6 @@ import {
   createEditorState,
   redoEditorState,
   undoEditorState,
-  workspaceWithRevision,
   type EditorState,
 } from "./editor-history";
 import {
@@ -145,9 +148,15 @@ export interface WorkspaceApplicationProps {
   application: Readonly<SynAIusApplicationManifest>;
   contentRegistry?: ContentRegistry<ReactNode, WorkspaceContentRenderContext>;
   initializeWorkspace?: (workspace: WorkspaceState) => WorkspaceState;
+  workspaceControl?: WorkspaceControlGateway;
 }
 
-export function WorkspaceApplication({ application, contentRegistry, initializeWorkspace }: WorkspaceApplicationProps) {
+export function WorkspaceApplication({
+  application,
+  contentRegistry,
+  initializeWorkspace,
+  workspaceControl,
+}: WorkspaceApplicationProps) {
   const t = useMemo(() => createTranslator(application.localeMessages), [application]);
   const contentCatalog = useMemo(() => contentRegistry?.listCatalog() ?? [], [contentRegistry]);
   const deviceNames = useMemo<DeviceNames>(() => ({
@@ -162,6 +171,9 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
   const [editor, setEditor] = useState<EditorState>(() => createEditorState(
     createInitialWorkspace(application, t, deviceNames, cloneNameTemplates, initializeWorkspace),
   ));
+  const [controlStatus, setControlStatus] = useState<"local" | "connecting" | "live" | "error">(
+    workspaceControl ? "connecting" : "local",
+  );
   const workspace = editor.workspace;
   const activeView = workspace.views[workspace.activeViewId];
   const viewportStorageKey = canvasViewportKey(activeView.id, workspace.activeLayout);
@@ -181,13 +193,53 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
   const focusTimerRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
   const workspaceRef = useRef(workspace);
+  const editorRef = useRef(editor);
+  const controlReadyRef = useRef(!workspaceControl);
+  const controlQueueRef = useRef(Promise.resolve());
+  const controlRetryRef = useRef<number | null>(null);
+  const controlMountedRef = useRef(true);
   const savedViewport = viewports[viewportStorageKey] ?? DEFAULT_CANVAS_VIEWPORT;
   const viewport = panDrag?.previewViewport ?? savedViewport;
   const viewportRef = useRef(viewport);
   workspaceRef.current = workspace;
+  editorRef.current = editor;
   viewportRef.current = viewport;
 
   document.title = t(application.titleKey);
+
+  useEffect(() => {
+    if (!workspaceControl) return;
+    let active = true;
+    controlMountedRef.current = true;
+    controlReadyRef.current = false;
+    setControlStatus("connecting");
+
+    const connect = () => {
+      if (!active) return;
+      workspaceControl.connect(workspaceRef.current, handleControlEvent)
+        .then((snapshot) => {
+          if (!active) return;
+          adoptControlledWorkspace(snapshot.workspace, true);
+          controlReadyRef.current = true;
+          setControlStatus("live");
+        })
+        .catch(() => {
+          if (!active) return;
+          controlReadyRef.current = false;
+          setControlStatus("error");
+          controlRetryRef.current = window.setTimeout(connect, 2_000);
+        });
+    };
+    connect();
+    return () => {
+      active = false;
+      controlMountedRef.current = false;
+      controlReadyRef.current = false;
+      if (controlRetryRef.current !== null) window.clearTimeout(controlRetryRef.current);
+      controlRetryRef.current = null;
+      workspaceControl.close();
+    };
+  }, [workspaceControl]);
 
   useEffect(() => {
     saveWorkspace(workspace, application.storageNamespace);
@@ -282,19 +334,93 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  function commitWorkspace(transform: (current: WorkspaceState) => WorkspaceState, recordHistory = true) {
-    setEditor((current) => commitEditorState(current, transform, recordHistory));
+  function send<T extends WorkspaceCommand["type"]>(type: T, payload: CommandPayload<T>) {
+    dispatchCommands([{ type, payload }], commandRecordsHistory(type));
   }
 
-  function send<T extends WorkspaceCommand["type"]>(type: T, payload: CommandPayload<T>) {
-    commitWorkspace((current) =>
-      applyWorkspaceCommand(current, {
+  function dispatchCommands(
+    drafts: Array<{ type: WorkspaceCommand["type"]; payload: WorkspaceCommand["payload"] }>,
+    recordHistory = true,
+  ) {
+    if (workspaceControl && !controlReadyRef.current) return;
+    let nextWorkspace = workspaceRef.current;
+    const commands: WorkspaceCommand[] = [];
+    for (const draft of drafts) {
+      const command = {
         id: crypto.randomUUID(),
-        expectedRevision: current.revision,
-        type,
-        payload,
-      } as WorkspaceCommand).state,
-    commandRecordsHistory(type));
+        expectedRevision: nextWorkspace.revision,
+        type: draft.type,
+        payload: draft.payload,
+      } as WorkspaceCommand;
+      nextWorkspace = applyWorkspaceCommand(nextWorkspace, command).state;
+      commands.push(command);
+    }
+    const nextEditor = commitEditorState(editorRef.current, () => nextWorkspace, recordHistory);
+    workspaceRef.current = nextWorkspace;
+    editorRef.current = nextEditor;
+    setEditor(nextEditor);
+    enqueueControlledCommands(commands);
+  }
+
+  function enqueueControlledCommands(commands: WorkspaceCommand[]) {
+    if (!workspaceControl || commands.length === 0) return;
+    const workspaceId = workspaceRef.current.id;
+    controlQueueRef.current = controlQueueRef.current
+      .then(async () => {
+        for (const command of commands) {
+          const result = await workspaceControl.execute(workspaceId, command);
+          if (result.workspace.revision > workspaceRef.current.revision) {
+            adoptControlledWorkspace(result.workspace);
+          }
+        }
+        if (controlMountedRef.current) setControlStatus("live");
+      })
+      .catch(() => reconcileWorkspaceControl());
+  }
+
+  function handleControlEvent(event: DurableWorkspaceEvent) {
+    const current = workspaceRef.current;
+    if (event.workspaceId !== current.id || event.revision <= current.revision) return;
+    if (event.revision !== current.revision + 1) {
+      void reconcileWorkspaceControl();
+      return;
+    }
+    try {
+      const next = applyWorkspaceCommand(current, event.command).state;
+      if (next.revision !== event.revision) throw new Error("workspace-control.event.revision.invalid");
+      adoptControlledWorkspace(next);
+    } catch {
+      void reconcileWorkspaceControl();
+    }
+  }
+
+  async function reconcileWorkspaceControl() {
+    if (!workspaceControl || !controlMountedRef.current) return;
+    controlReadyRef.current = false;
+    setControlStatus("error");
+    try {
+      const snapshot = await workspaceControl.read(workspaceRef.current.id);
+      if (!controlMountedRef.current) return;
+      adoptControlledWorkspace(snapshot.workspace, true);
+      controlReadyRef.current = true;
+      setControlStatus("live");
+    } catch {
+      if (!controlMountedRef.current || controlRetryRef.current !== null) return;
+      controlRetryRef.current = window.setTimeout(() => {
+        controlRetryRef.current = null;
+        void reconcileWorkspaceControl();
+      }, 2_000);
+    }
+  }
+
+  function adoptControlledWorkspace(next: WorkspaceState, force = false) {
+    if (next.id !== workspaceRef.current.id) return;
+    if (!force && next.revision <= workspaceRef.current.revision) return;
+    const controlled = structuredClone(next);
+    const nextEditor = createEditorState(controlled);
+    workspaceRef.current = controlled;
+    editorRef.current = nextEditor;
+    setEditor(nextEditor);
   }
 
   function focusBox(boxId: string) {
@@ -331,13 +457,31 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
   }
 
   function undoWorkspace() {
-    setEditor(undoEditorState);
+    applyHistoryTransition(undoEditorState(editorRef.current));
     setContext(null);
   }
 
   function redoWorkspace() {
-    setEditor(redoEditorState);
+    applyHistoryTransition(redoEditorState(editorRef.current));
     setContext(null);
+  }
+
+  function applyHistoryTransition(nextEditor: EditorState) {
+    if (nextEditor === editorRef.current) return;
+    if (workspaceControl && !controlReadyRef.current) return;
+    const current = workspaceRef.current;
+    const command = {
+      id: crypto.randomUUID(),
+      expectedRevision: current.revision,
+      type: "workspace.restore",
+      payload: { workspace: nextEditor.workspace },
+    } as WorkspaceCommand;
+    const nextWorkspace = applyWorkspaceCommand(current, command).state;
+    const synchronizedEditor = { ...nextEditor, workspace: nextWorkspace };
+    workspaceRef.current = nextWorkspace;
+    editorRef.current = synchronizedEditor;
+    setEditor(synchronizedEditor);
+    enqueueControlledCommands([command]);
   }
 
   function copyLayout(target: LayoutId) {
@@ -395,7 +539,7 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
   }
 
   function restoreSnapshot(snapshot: WorkspaceSnapshot) {
-    commitWorkspace((current) => workspaceWithRevision(snapshot.workspace, current.revision + 1));
+    send("workspace.restore", { workspace: snapshot.workspace });
     setContext(null);
   }
 
@@ -428,7 +572,7 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
       event.target.value = "";
       return;
     }
-    commitWorkspace((current) => workspaceWithRevision(imported, current.revision + 1));
+    send("workspace.restore", { workspace: imported });
     setContext(null);
   }
 
@@ -458,22 +602,12 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
     : false;
 
   function addView() {
-    commitWorkspace((current) => {
-      const viewId = crypto.randomUUID();
-      const name = nextAvailableName(t, "workspace.view.generatedName", Object.values(current.views).map((view) => view.name));
-      const created = applyWorkspaceCommand(current, {
-        id: crypto.randomUUID(),
-        expectedRevision: current.revision,
-        type: "view.create",
-        payload: { viewId, name },
-      });
-      return applyWorkspaceCommand(created.state, {
-        id: crypto.randomUUID(),
-        expectedRevision: created.state.revision,
-        type: "view.activate",
-        payload: { viewId },
-      }).state;
-    });
+    const viewId = crypto.randomUUID();
+    const name = nextAvailableName(t, "workspace.view.generatedName", Object.values(workspace.views).map((view) => view.name));
+    dispatchCommands([
+      { type: "view.create", payload: { viewId, name } },
+      { type: "view.activate", payload: { viewId } },
+    ]);
     setContext(null);
   }
 
@@ -494,28 +628,20 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
   }
 
   function addBox(parentId: string | null = null, point?: GridPoint) {
-    commitWorkspace((current) => {
-      const view = current.views[current.activeViewId];
-      const parent = parentId ? current.boxes[parentId] : null;
-      const columns = parent?.childGrid.columns ?? null;
-      const occupiedNames = Object.values(current.boxes).map((box) => box.name);
-      const contentCount = Object.values(current.boxes).filter((box) => box.role.type === "content").length;
-      const fallbackPoint = {
-        column: (contentCount % 4) * 6,
-        row: 3 + Math.floor(contentCount / 4) * 4,
-      };
-      return applyWorkspaceCommand(current, {
-        id: crypto.randomUUID(),
-        expectedRevision: current.revision,
-        type: "box.create",
-        payload: {
-          boxId: crypto.randomUUID(),
-          viewId: view.id,
-          parentId,
-          name: nextAvailableName(t, "workspace.box.generatedName", occupiedNames),
-          rect: rectAtPoint(point ?? fallbackPoint, 6, 4, columns),
-        },
-      }).state;
+    const parent = parentId ? workspace.boxes[parentId] : null;
+    const columns = parent?.childGrid.columns ?? null;
+    const occupiedNames = Object.values(workspace.boxes).map((box) => box.name);
+    const contentCount = Object.values(workspace.boxes).filter((box) => box.role.type === "content").length;
+    const fallbackPoint = {
+      column: (contentCount % 4) * 6,
+      row: 3 + Math.floor(contentCount / 4) * 4,
+    };
+    send("box.create", {
+      boxId: crypto.randomUUID(),
+      viewId: workspace.activeViewId,
+      parentId,
+      name: nextAvailableName(t, "workspace.box.generatedName", occupiedNames),
+      rect: rectAtPoint(point ?? fallbackPoint, 6, 4, columns),
     });
     setContext(null);
   }
@@ -588,24 +714,19 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
       const { revision: _revision, ...content } = instance;
       const parentId = contextBox?.role.type === "content" ? contextBox.id : null;
       const point = parentId ? { column: 0, row: 0 } : context.point;
-      commitWorkspace((current) => applyWorkspaceCommand(current, {
-        id: crypto.randomUUID(),
-        expectedRevision: current.revision,
-        type: "content.box.create",
-        payload: {
-          content,
-          boxId: `box:${crypto.randomUUID()}`,
-          viewId: current.activeViewId,
-          parentId,
-          name,
-          rect: rectAtPoint(
-            point,
-            definition.catalog.defaultWidth,
-            definition.catalog.defaultHeight,
-            parentId ? current.boxes[parentId]?.childGrid.columns ?? null : null,
-          ),
-        },
-      }).state);
+      send("content.box.create", {
+        content,
+        boxId: `box:${crypto.randomUUID()}`,
+        viewId: workspace.activeViewId,
+        parentId,
+        name,
+        rect: rectAtPoint(
+          point,
+          definition.catalog.defaultWidth,
+          definition.catalog.defaultHeight,
+          parentId ? workspace.boxes[parentId]?.childGrid.columns ?? null : null,
+        ),
+      });
       setContext(null);
     } catch {
       setContext({ ...context, errorKey: "workspace.content.error.invalid" });
@@ -1118,7 +1239,14 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
       data-handles-visible={workspace.preferences.handlesVisible}
       data-names-visible={workspace.preferences.namesVisible}
       data-layout={workspace.activeLayout}
+      data-control-status={controlStatus}
+      data-control-ready={!workspaceControl || controlStatus === "live"}
     >
+      {workspaceControl && (
+        <div className="workspace-control-status" role="status">
+          {t(`workspace.control.${controlStatus}`)}
+        </div>
+      )}
       <section
         className="canvas"
         data-grid-visible={activeView.grid.visible}
