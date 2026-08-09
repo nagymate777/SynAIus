@@ -17,6 +17,12 @@ A Codex App által éppen birtokolt threadre egy második app-server kliens nem 
 
 Szabad vagy a bridge által birtokolt threadnél a kapcsolat interaktív marad, és a natív app-server értesítési streamet használja.
 
+## Munkadoboz-műveletek
+
+A feladatválasztó a lapozott `thread/list` szerződést és annak `searchTerm` mezőjét használja. Az új feladat űrlapja a `model/list` eredményéből épül fel; modell- vagy gondolkodási erősség nem lehet beégetve. A `thread/start` nem írja felül a helyi Codex jóváhagyási és sandbox-beállításait. Az első és a későbbi üresjárati utasítás `turn/start`, az aktív körhöz adott kiegészítés `turn/steer`.
+
+Minden böngészős csatlakozás egy véletlen azonosítójú mellékletet kap. A stream csak ezzel az azonosítóval nyitható meg, és a feladatváltás vagy a renderer lebontása kifejezett leválasztást küld. Az utolsó melléklet megszűnésekor a bridge `thread/unsubscribe` kéréssel leválik az app-serverről, eltávolítja a tartós feliratkozást és leállítja az esetleges megfigyelői pollingot.
+
 ## Következmények
 
 - A stream a böngésző vagy a bridge rövid kiesése után kurzorról folytatható.

@@ -55,7 +55,22 @@ async function route(
   if (request.method === "GET" && url.pathname === "/api/thread-stream/threads") {
     const cursor = url.searchParams.get("cursor");
     const limit = boundedInteger(url.searchParams.get("limit"), 50, 1, 100);
-    return writeJson(response, 200, await service.listThreads(cursor, limit));
+    const searchTerm = url.searchParams.get("searchTerm");
+    return writeJson(response, 200, await service.listThreads({ cursor, limit, searchTerm }));
+  }
+  if (request.method === "GET" && url.pathname === "/api/thread-stream/models") {
+    const cursor = url.searchParams.get("cursor");
+    const limit = boundedInteger(url.searchParams.get("limit"), 100, 1, 100);
+    return writeJson(response, 200, await service.listModels(cursor, limit));
+  }
+  if (request.method === "POST" && url.pathname === "/api/thread-stream/threads") {
+    const body = await readJsonBody(request);
+    return writeJson(response, 201, await service.createThread({
+      model: requiredString(body.model, "thread-stream.model.required"),
+      effort: optionalString(body.effort),
+      cwd: optionalString(body.cwd),
+      message: requiredString(body.message, "thread-stream.message.required"),
+    }));
   }
 
   const threadPath = url.pathname.match(/^\/api\/thread-stream\/threads\/([^/]+)$/);
@@ -64,13 +79,27 @@ async function route(
   }
 
   const actionPath = url.pathname.match(
-    /^\/api\/thread-stream\/threads\/([^/]+)\/(attach|resume|steer|interrupt)$/,
+    /^\/api\/thread-stream\/threads\/([^/]+)\/(attach|detach|resume|turns|steer|interrupt)$/,
   );
   if (request.method === "POST" && actionPath) {
     const threadId = decodeURIComponent(actionPath[1]);
     if (actionPath[2] === "attach") return writeJson(response, 200, await service.attachThread(threadId));
     if (actionPath[2] === "resume") return writeJson(response, 200, await service.resumeThread(threadId));
     const body = await readJsonBody(request);
+    if (actionPath[2] === "detach") {
+      await service.releaseAttachment(
+        threadId,
+        requiredString(body.attachmentId, "thread-stream.attachmentId.required"),
+      );
+      return writeJson(response, 200, { ok: true });
+    }
+    if (actionPath[2] === "turns") {
+      await service.startTurn(
+        threadId,
+        requiredString(body.message, "thread-stream.message.required"),
+      );
+      return writeJson(response, 201, { ok: true });
+    }
     const turnId = requiredString(body.turnId, "thread-stream.turnId.required");
     if (actionPath[2] === "steer") {
       await service.steerTurn(
@@ -97,6 +126,13 @@ async function route(
 
   const streamPath = url.pathname.match(/^\/api\/thread-stream\/threads\/([^/]+)\/stream$/);
   if (request.method === "GET" && streamPath) {
+    const attachmentId = requiredString(
+      url.searchParams.get("attachmentId"),
+      "thread-stream.attachmentId.required",
+    );
+    if (!service.hasAttachment(decodeURIComponent(streamPath[1]), attachmentId)) {
+      throw Object.assign(new Error("thread-stream.attachment.invalid"), { statusCode: 404 });
+    }
     return streamThread(
       service,
       decodeURIComponent(streamPath[1]),
@@ -185,6 +221,10 @@ async function readJsonBody(request: IncomingMessage) {
 function requiredString(value: unknown, code: string) {
   if (typeof value !== "string" || !value.trim()) throw new Error(code);
   return value.trim();
+}
+
+function optionalString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function boundedInteger(value: string | null, fallback: number, minimum: number, maximum: number) {

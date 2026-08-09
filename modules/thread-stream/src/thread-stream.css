@@ -5,7 +5,7 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   gap: 0.4rem;
   padding: 0.55rem;
   color: #e9f4f2;
@@ -17,6 +17,7 @@
 }
 
 .thread-stream-toolbar,
+.thread-stream-browser,
 .thread-stream-compose {
   display: flex;
   min-width: 0;
@@ -28,13 +29,19 @@
   width: 0;
 }
 
-.thread-stream-compose button {
+.thread-stream-compose button,
+.thread-stream-browser button,
+.thread-stream-new button {
   flex: 0 0 auto;
   white-space: nowrap;
 }
 
 .thread-stream-toolbar select,
-.thread-stream-compose input {
+.thread-stream-compose input,
+.thread-stream-browser input,
+.thread-stream-new input,
+.thread-stream-new select,
+.thread-stream-new textarea {
   min-width: 0;
   flex: 1;
   padding: 0.38rem 0.48rem;
@@ -42,6 +49,16 @@
   border-radius: 0.35rem;
   background: #07171d;
   color: inherit;
+}
+
+.thread-stream-browser input {
+  width: 0;
+}
+
+.thread-stream-browser button {
+  overflow: hidden;
+  max-width: 42%;
+  text-overflow: ellipsis;
 }
 
 .thread-stream-connection {
@@ -55,11 +72,16 @@
 }
 
 .thread-stream-title {
+  min-height: 0.9rem;
   overflow: hidden;
   color: #a8c7c4;
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-stream-compose[hidden] {
+  display: none;
 }
 
 .thread-stream-log {
@@ -70,6 +92,41 @@
   flex-direction: column;
   gap: 0.4rem;
   padding: 0.2rem;
+}
+
+.thread-stream-new {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 0.5rem;
+  padding: 0.2rem;
+}
+
+.thread-stream-new-title,
+.thread-stream-new-message,
+.thread-stream-new-actions {
+  grid-column: 1 / -1;
+}
+
+.thread-stream-new label {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+  color: #a8c7c4;
+  font-size: 0.72rem;
+}
+
+.thread-stream-new textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.thread-stream-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .thread-stream-line {
@@ -104,6 +161,8 @@
   color: #ff9f9f;
 }
 
-.thread-stream-compose button {
+.thread-stream-compose button,
+.thread-stream-browser button,
+.thread-stream-new button {
   padding: 0.38rem 0.5rem;
 }

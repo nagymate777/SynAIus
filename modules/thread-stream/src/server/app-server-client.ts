@@ -6,7 +6,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type {
   AppServerNotification,
+  CodexModelPage,
+  CreateCodexThreadInput,
   ThreadPage,
+  ThreadListQuery,
   ThreadRuntimeStatus,
   ThreadSnapshot,
   ThreadSummary,
@@ -101,10 +104,12 @@ export class AppServerClient extends EventEmitter {
     this.process.stdin.write(`${JSON.stringify({ method, params })}\n`);
   }
 
-  async listThreads(cursor: string | null = null, limit = 50): Promise<ThreadPage> {
+  async listThreads(query: ThreadListQuery = {}): Promise<ThreadPage> {
+    const { cursor = null, limit = 50, searchTerm = null } = query;
     const response = await this.request<{ data?: unknown[]; nextCursor?: string | null }>("thread/list", {
       cursor,
       limit,
+      searchTerm: searchTerm?.trim() || null,
       sortKey: "updated_at",
       sortDirection: "desc",
     });
@@ -112,6 +117,43 @@ export class AppServerClient extends EventEmitter {
       threads: (response.data ?? []).map(toThreadSummary),
       nextCursor: response.nextCursor ?? null,
     };
+  }
+
+  async listModels(cursor: string | null = null, limit = 100): Promise<CodexModelPage> {
+    const response = await this.request<{ data?: unknown[]; nextCursor?: string | null }>("model/list", {
+      cursor,
+      limit,
+      includeHidden: false,
+    });
+    return {
+      models: (response.data ?? []).map(toModelSummary),
+      nextCursor: response.nextCursor ?? null,
+    };
+  }
+
+  async createThread(input: CreateCodexThreadInput): Promise<ThreadSnapshot> {
+    const response = await this.request<{ thread?: unknown }>("thread/start", {
+      model: input.model,
+      cwd: input.cwd?.trim() || null,
+      serviceName: "synaius-operai",
+    });
+    const thread = asRecord(response.thread);
+    const threadId = requiredString(thread.id, "thread-stream.thread.id.missing");
+    return toThreadSnapshot(thread, threadId);
+  }
+
+  async startTurn(
+    threadId: string,
+    message: string,
+    options: { model?: string | null; effort?: string | null } = {},
+  ) {
+    const response = await this.request<{ turn?: unknown }>("turn/start", {
+      threadId,
+      input: [{ type: "text", text: message, text_elements: [] }],
+      model: options.model || null,
+      effort: options.effort || null,
+    });
+    return requiredString(asRecord(response.turn).id, "thread-stream.turn.id.missing");
   }
 
   async readThread(threadId: string): Promise<ThreadSnapshot> {
@@ -125,6 +167,10 @@ export class AppServerClient extends EventEmitter {
   async resumeThread(threadId: string): Promise<ThreadSnapshot> {
     const response = await this.request<{ thread?: unknown }>("thread/resume", { threadId });
     return toThreadSnapshot(response.thread, threadId);
+  }
+
+  async unsubscribeThread(threadId: string) {
+    await this.request("thread/unsubscribe", { threadId });
   }
 
   async steerTurn(threadId: string, turnId: string, message: string) {
@@ -319,6 +365,24 @@ function toThreadSummary(raw: unknown): ThreadSummary {
     createdAt: numberValue(thread.createdAt),
     updatedAt: numberValue(thread.updatedAt),
     status: runtimeStatus(thread.status),
+  };
+}
+
+function toModelSummary(raw: unknown) {
+  const model = asRecord(raw);
+  return {
+    id: requiredString(model.id, "thread-stream.model.id.missing"),
+    displayName: requiredString(model.displayName, "thread-stream.model.displayName.missing"),
+    description: stringValue(model.description) ?? "",
+    defaultReasoningEffort: stringValue(model.defaultReasoningEffort) ?? "medium",
+    supportedReasoningEfforts: (Array.isArray(model.supportedReasoningEfforts)
+      ? model.supportedReasoningEfforts
+      : []).flatMap((value) => {
+      const effort = asRecord(value);
+      const id = stringValue(effort.reasoningEffort);
+      return id ? [{ id, description: stringValue(effort.description) ?? "" }] : [];
+    }),
+    isDefault: model.isDefault === true,
   };
 }
 

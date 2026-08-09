@@ -21,6 +21,38 @@ export interface ThreadPage {
   nextCursor: string | null;
 }
 
+export interface ThreadListQuery {
+  cursor?: string | null;
+  limit?: number;
+  searchTerm?: string | null;
+}
+
+export interface CodexReasoningEffort {
+  id: string;
+  description: string;
+}
+
+export interface CodexModelSummary {
+  id: string;
+  displayName: string;
+  description: string;
+  defaultReasoningEffort: string;
+  supportedReasoningEfforts: CodexReasoningEffort[];
+  isDefault: boolean;
+}
+
+export interface CodexModelPage {
+  models: CodexModelSummary[];
+  nextCursor: string | null;
+}
+
+export interface CreateCodexThreadInput {
+  model: string;
+  effort?: string | null;
+  cwd?: string | null;
+  message: string;
+}
+
 export interface ThreadSnapshot {
   threadId: string;
   cursor: StreamCursor | null;
@@ -49,10 +81,13 @@ export interface ThreadAttachment {
 }
 
 export interface ThreadStreamGateway {
-  listThreads(cursor?: string | null, limit?: number): Promise<ThreadPage>;
+  listThreads(query?: ThreadListQuery): Promise<ThreadPage>;
+  listModels(cursor?: string | null, limit?: number): Promise<CodexModelPage>;
+  createThread(input: CreateCodexThreadInput): Promise<ThreadSnapshot>;
   readThread(threadId: string): Promise<ThreadSnapshot>;
   attachThread(threadId: string, after?: StreamCursor): Promise<ThreadAttachment>;
   resumeThread(threadId: string): Promise<ThreadSnapshot>;
+  startTurn(threadId: string, message: string): Promise<void>;
   steerTurn(threadId: string, turnId: string, message: string): Promise<void>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
 }

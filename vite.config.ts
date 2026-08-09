@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
     },
     server: application === "operai" ? {
+      allowedHosts: [".ts.net"],
       proxy: {
         "/api/thread-stream": bridgeTarget,
       },

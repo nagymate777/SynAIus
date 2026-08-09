@@ -59,6 +59,8 @@ describe("durable thread event store", () => {
       status: "active",
     });
     expect(store.attachedThreadIds()).toEqual(["thread-1"]);
+    store.detachThread("thread-1");
+    expect(store.attachedThreadIds()).toEqual([]);
     store.close();
   });
 

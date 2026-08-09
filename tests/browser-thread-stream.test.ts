@@ -19,7 +19,7 @@ describe("browser thread-stream gateway", () => {
       baseUrl: "/bridge",
       fetchImplementation: (async (url: string | URL | Request, init?: RequestInit) => {
         requests.push({ url: String(url), init });
-        return new Response(JSON.stringify(snapshot), {
+        return new Response(JSON.stringify({ snapshot, attachmentId: "attachment-1" }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -33,7 +33,7 @@ describe("browser thread-stream gateway", () => {
     const attachment = await gateway.attachThread("thread/1");
     expect(requests[0].url).toBe("/bridge/threads/thread%2F1/attach");
     expect(requests[0].init?.method).toBe("POST");
-    expect(source.url).toBe("/bridge/threads/thread%2F1/stream?after=12");
+    expect(source.url).toBe("/bridge/threads/thread%2F1/stream?attachmentId=attachment-1&after=12");
 
     const event: DurableThreadEvent = {
       cursor: "13",
@@ -50,6 +50,8 @@ describe("browser thread-stream gateway", () => {
     expect(await nextEvent).toEqual({ value: event, done: false });
     await attachment.detach();
     expect(source.closed).toBe(true);
+    expect(requests[1].url).toBe("/bridge/threads/thread%2F1/detach");
+    expect(requests[1].init?.body).toBe(JSON.stringify({ attachmentId: "attachment-1" }));
   });
 
   it("binds the native fetch implementation to its global owner", async () => {

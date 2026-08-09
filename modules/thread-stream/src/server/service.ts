@@ -1,10 +1,13 @@
 import { EventEmitter } from "node:events";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AppServerNotification,
+  CodexModelPage,
+  CreateCodexThreadInput,
   DurableThreadEvent,
   StreamCursor,
   ThreadPage,
+  ThreadListQuery,
   ThreadSnapshot,
 } from "@synaius/protocol";
 import { AppServerClient, reconnectDelayMs, toThreadSnapshot } from "./app-server-client.ts";
@@ -27,9 +30,17 @@ export interface ThreadStreamAppServerClient {
   readonly connectionId: string | null;
   start(): Promise<unknown>;
   stop(): void;
-  listThreads(cursor?: string | null, limit?: number): Promise<ThreadPage>;
+  listThreads(query?: ThreadListQuery): Promise<ThreadPage>;
+  listModels(cursor?: string | null, limit?: number): Promise<CodexModelPage>;
+  createThread(input: CreateCodexThreadInput): Promise<ThreadSnapshot>;
+  startTurn(
+    threadId: string,
+    message: string,
+    options?: { model?: string | null; effort?: string | null },
+  ): Promise<string>;
   readThread(threadId: string): Promise<ThreadSnapshot>;
   resumeThread(threadId: string): Promise<ThreadSnapshot>;
+  unsubscribeThread(threadId: string): Promise<void>;
   steerTurn(threadId: string, turnId: string, message: string): Promise<void>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   on(event: "notification", listener: (payload: {
@@ -75,6 +86,7 @@ export class ThreadStreamService {
   private readonly observeOnlyThreadIds = new Set<string>();
   private readonly snapshotDigests = new Map<string, string>();
   private readonly pollers = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly attachments = new Map<string, string>();
 
   constructor(options: ThreadStreamServiceOptions) {
     this.store = options.store;
@@ -152,8 +164,32 @@ export class ThreadStreamService {
     };
   }
 
-  listThreads(cursor: string | null = null, limit = 50): Promise<ThreadPage> {
-    return this.client.listThreads(cursor, limit);
+  listThreads(query: ThreadListQuery = {}): Promise<ThreadPage> {
+    return this.client.listThreads(query);
+  }
+
+  listModels(cursor: string | null = null, limit = 100): Promise<CodexModelPage> {
+    return this.client.listModels(cursor, limit);
+  }
+
+  async createThread(input: CreateCodexThreadInput): Promise<ThreadSnapshot> {
+    const message = input.message.trim();
+    if (!message) throw new Error("thread-stream.message.required");
+    if (!input.model.trim()) throw new Error("thread-stream.model.required");
+    const snapshot = await this.client.createThread({
+      ...input,
+      model: input.model.trim(),
+      cwd: input.cwd?.trim() || null,
+      message,
+    });
+    this.store.saveSnapshot(snapshot);
+    const turnId = await this.client.startTurn(snapshot.threadId, message, {
+      model: input.model.trim(),
+      effort: input.effort?.trim() || null,
+    });
+    const activeSnapshot = { ...snapshot, activeTurnId: turnId, status: "active" as const };
+    this.store.saveSnapshot(activeSnapshot);
+    return { ...activeSnapshot, cursor: this.store.latestCursor(snapshot.threadId) };
   }
 
   async readThread(threadId: string): Promise<ThreadSnapshot> {
@@ -180,8 +216,47 @@ export class ThreadStreamService {
     return { ...snapshot, cursor: this.store.latestCursor(threadId) };
   }
 
-  async attachThread(threadId: string): Promise<ThreadSnapshot> {
+  async attachThread(threadId: string) {
     this.store.attachThread(threadId);
+    const attachmentId = randomUUID();
+    this.attachments.set(attachmentId, threadId);
+    try {
+      return { attachmentId, snapshot: await this.attachSnapshot(threadId) };
+    } catch (error) {
+      this.attachments.delete(attachmentId);
+      if (![...this.attachments.values()].includes(threadId)) this.store.detachThread(threadId);
+      throw error;
+    }
+  }
+
+  async releaseAttachment(threadId: string, attachmentId: string) {
+    if (this.attachments.get(attachmentId) !== threadId) return false;
+    this.attachments.delete(attachmentId);
+    if (![...this.attachments.values()].includes(threadId)) {
+      this.store.detachThread(threadId);
+      this.observeOnlyThreadIds.delete(threadId);
+      this.stopPolling(threadId);
+      if (this.client.connected) await this.client.unsubscribeThread(threadId);
+    }
+    return true;
+  }
+
+  hasAttachment(threadId: string, attachmentId: string) {
+    return this.attachments.get(attachmentId) === threadId;
+  }
+
+  async startTurn(threadId: string, message: string) {
+    const normalized = message.trim();
+    if (!normalized) throw new Error("thread-stream.message.required");
+    if (this.observeOnlyThreadIds.has(threadId)) {
+      throw new Error("thread-stream.thread.observeOnly");
+    }
+    const turnId = await this.client.startTurn(threadId, normalized);
+    const current = this.store.readSnapshot(threadId) ?? await this.client.readThread(threadId);
+    this.store.saveSnapshot({ ...current, activeTurnId: turnId, status: "active" });
+  }
+
+  private async attachSnapshot(threadId: string): Promise<ThreadSnapshot> {
     if (this.observeOnlyThreadIds.has(threadId)) {
       const cached = this.store.readSnapshot(threadId);
       if (cached) {

@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AppServerNotification, ThreadPage, ThreadSnapshot } from "@synaius/protocol";
+import type {
+  AppServerNotification,
+  CodexModelPage,
+  CreateCodexThreadInput,
+  ThreadPage,
+  ThreadSnapshot,
+} from "@synaius/protocol";
 import {
   ThreadEventStore,
   ThreadStreamService,
@@ -97,9 +103,9 @@ describe("thread stream service", () => {
     });
     await service.start();
     const attached = await service.attachThread("thread-1");
-    expect(attached.accessMode).toBe("observe");
+    expect(attached.snapshot.accessMode).toBe("observe");
     expect(store.eventsAfter("thread-1").at(-1)?.method).toBe("gateway/readOnlyAttached");
-    expect((await service.attachThread("thread-1")).accessMode).toBe("observe");
+    expect((await service.attachThread("thread-1")).snapshot.accessMode).toBe("observe");
     expect(client.resumeAttempts).toBe(1);
 
     client.currentSnapshot = {
@@ -117,6 +123,42 @@ describe("thread stream service", () => {
     expect(store.eventsAfter("thread-1").at(-1)?.method).toBe("gateway/snapshotChanged");
     service.close();
   });
+
+  it("creates a thread, starts its first turn, starts later turns, and releases attachments", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "synaius-thread-service-"));
+    temporaryDirectories.push(directory);
+    const store = new ThreadEventStore(join(directory, "events.sqlite"));
+    const client = new FakeAppServerClient();
+    const service = new ThreadStreamService({ store, client });
+    await service.start();
+
+    const created = await service.createThread({
+      model: "test-model",
+      effort: "high",
+      cwd: "C:/project",
+      message: "Első utasítás",
+    });
+    expect(created).toMatchObject({ threadId: "thread-created", activeTurnId: "turn-1", status: "active" });
+    expect(client.created).toMatchObject({ model: "test-model", effort: "high", cwd: "C:/project" });
+    expect(client.startedTurns).toEqual([
+      { threadId: "thread-created", message: "Első utasítás", model: "test-model", effort: "high" },
+    ]);
+
+    const attachment = await service.attachThread("thread-created");
+    expect(store.attachedThreadIds()).toEqual(["thread-created"]);
+    expect(service.hasAttachment("thread-created", attachment.attachmentId)).toBe(true);
+    expect(await service.releaseAttachment("thread-created", attachment.attachmentId)).toBe(true);
+    expect(store.attachedThreadIds()).toEqual([]);
+    expect(client.unsubscribed).toEqual(["thread-created"]);
+
+    client.currentSnapshot = snapshot("thread-created");
+    await service.startTurn("thread-created", "Következő utasítás");
+    expect(client.startedTurns.at(-1)).toMatchObject({
+      threadId: "thread-created",
+      message: "Következő utasítás",
+    });
+    service.close();
+  });
 });
 
 class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerClient {
@@ -127,6 +169,14 @@ class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerC
   resumeAttempts = 0;
   activeWriter = false;
   currentSnapshot: ThreadSnapshot | null = null;
+  created: CreateCodexThreadInput | null = null;
+  startedTurns: Array<{
+    threadId: string;
+    message: string;
+    model?: string | null;
+    effort?: string | null;
+  }> = [];
+  unsubscribed: string[] = [];
 
   async start() {
     this.startCount += 1;
@@ -144,6 +194,24 @@ class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerC
     return { threads: [], nextCursor: null };
   }
 
+  async listModels(): Promise<CodexModelPage> {
+    return { models: [], nextCursor: null };
+  }
+
+  async createThread(input: CreateCodexThreadInput) {
+    this.created = input;
+    return snapshot("thread-created");
+  }
+
+  async startTurn(
+    threadId: string,
+    message: string,
+    options: { model?: string | null; effort?: string | null } = {},
+  ) {
+    this.startedTurns.push({ threadId, message, ...options });
+    return `turn-${this.startedTurns.length}`;
+  }
+
   async readThread(threadId: string) {
     return this.currentSnapshot ?? snapshot(threadId);
   }
@@ -153,6 +221,10 @@ class FakeAppServerClient extends EventEmitter implements ThreadStreamAppServerC
     if (this.activeWriter) throw new Error(`thread ${threadId} already has an active writer`);
     this.resumed.push(threadId);
     return snapshot(threadId);
+  }
+
+  async unsubscribeThread(threadId: string) {
+    this.unsubscribed.push(threadId);
   }
 
   async steerTurn() {}

@@ -76,6 +76,81 @@ describe("Codex app-server client", () => {
     expect(reconnectDelayMs(1, 100, 500)).toBe(100);
     expect(reconnectDelayMs(8, 100, 500)).toBe(500);
   });
+
+  it("uses searchable thread pages, the model catalog, and the v2 thread and turn start methods", async () => {
+    const child = fakeChild();
+    const outbound: Array<Record<string, unknown>> = [];
+    child.stdin.on("data", (chunk) => {
+      String(chunk).trim().split("\n").filter(Boolean).forEach((line) => {
+        const message = JSON.parse(line) as Record<string, unknown>;
+        outbound.push(message);
+        const method = message.method;
+        if (method === "initialized") return;
+        const result = method === "initialize"
+          ? { userAgent: "test" }
+          : method === "thread/list"
+            ? { data: [], nextCursor: "next-thread" }
+            : method === "model/list"
+              ? {
+                  data: [{
+                    id: "model-1",
+                    displayName: "Model One",
+                    description: "Test model",
+                    defaultReasoningEffort: "medium",
+                    supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
+                    isDefault: true,
+                  }],
+                  nextCursor: null,
+                }
+              : method === "thread/start"
+                ? { thread: { id: "thread-new", status: { type: "idle" }, turns: [] } }
+                : method === "thread/unsubscribe"
+                  ? { status: "unsubscribed" }
+                : method === "turn/start"
+                  ? { turn: { id: "turn-new" } }
+                  : {};
+        child.stdout.write(`${JSON.stringify({ id: message.id, result })}\n`);
+      });
+    });
+    const client = new AppServerClient({
+      executable: "codex-test",
+      spawnProcess: vi.fn(() => child) as unknown as typeof spawn,
+    });
+    await client.start();
+
+    expect(await client.listThreads({ searchTerm: "flotta", limit: 25 })).toEqual({
+      threads: [],
+      nextCursor: "next-thread",
+    });
+    expect(await client.listModels()).toMatchObject({
+      models: [{ id: "model-1", defaultReasoningEffort: "medium", isDefault: true }],
+    });
+    const created = await client.createThread({
+      model: "model-1",
+      effort: "medium",
+      cwd: "C:/project",
+      message: "Kezdés",
+    });
+    expect(created.threadId).toBe("thread-new");
+    expect(await client.startTurn("thread-new", "Kezdés", {
+      model: "model-1",
+      effort: "medium",
+    })).toBe("turn-new");
+    await client.unsubscribeThread("thread-new");
+    expect(outbound.find((message) => message.method === "thread/list")).toMatchObject({
+      params: { limit: 25, searchTerm: "flotta" },
+    });
+    expect(outbound.find((message) => message.method === "thread/start")).toMatchObject({
+      params: { model: "model-1", cwd: "C:/project", serviceName: "synaius-operai" },
+    });
+    expect(outbound.find((message) => message.method === "turn/start")).toMatchObject({
+      params: { threadId: "thread-new", model: "model-1", effort: "medium" },
+    });
+    expect(outbound.find((message) => message.method === "thread/unsubscribe")).toMatchObject({
+      params: { threadId: "thread-new" },
+    });
+    client.stop();
+  });
 });
 
 function fakeChild() {

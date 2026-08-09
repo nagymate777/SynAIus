@@ -163,6 +163,12 @@ export class ThreadEventStore {
     `).run(threadId, new Date().toISOString());
   }
 
+  detachThread(threadId: string) {
+    this.database.prepare(
+      "DELETE FROM thread_subscriptions WHERE thread_id = ?",
+    ).run(threadId);
+  }
+
   markResumed(threadId: string) {
     this.attachThread(threadId);
     this.database.prepare(

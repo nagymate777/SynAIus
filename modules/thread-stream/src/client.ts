@@ -1,7 +1,10 @@
 import type {
+  CodexModelPage,
+  CreateCodexThreadInput,
   DurableThreadEvent,
   StreamCursor,
   ThreadAttachment,
+  ThreadListQuery,
   ThreadPage,
   ThreadSnapshot,
   ThreadStreamGateway,
@@ -30,10 +33,25 @@ export class BrowserThreadStreamGateway implements ThreadStreamGateway {
       ?? ((url) => new EventSource(url) as unknown as EventSourceLike);
   }
 
-  listThreads(cursor: string | null = null, limit = 50): Promise<ThreadPage> {
+  listThreads(options: ThreadListQuery = {}): Promise<ThreadPage> {
+    const query = new URLSearchParams({ limit: String(options.limit ?? 50) });
+    if (options.cursor) query.set("cursor", options.cursor);
+    if (options.searchTerm?.trim()) query.set("searchTerm", options.searchTerm.trim());
+    return this.readJson<ThreadPage>(`${this.baseUrl}/threads?${query}`);
+  }
+
+  listModels(cursor: string | null = null, limit = 100): Promise<CodexModelPage> {
     const query = new URLSearchParams({ limit: String(limit) });
     if (cursor) query.set("cursor", cursor);
-    return this.readJson<ThreadPage>(`${this.baseUrl}/threads?${query}`);
+    return this.readJson<CodexModelPage>(`${this.baseUrl}/models?${query}`);
+  }
+
+  createThread(input: CreateCodexThreadInput): Promise<ThreadSnapshot> {
+    return this.readJson<ThreadSnapshot>(`${this.baseUrl}/threads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
   }
 
   readThread(threadId: string): Promise<ThreadSnapshot> {
@@ -47,16 +65,17 @@ export class BrowserThreadStreamGateway implements ThreadStreamGateway {
   }
 
   async attachThread(threadId: string, after?: StreamCursor): Promise<ThreadAttachment> {
-    const snapshot = await this.readJson<ThreadSnapshot>(
+    const attached = await this.readJson<{ snapshot: ThreadSnapshot; attachmentId: string }>(
       `${this.baseUrl}/threads/${encodeURIComponent(threadId)}/attach`,
       { method: "POST" },
     );
+    const { snapshot, attachmentId } = attached;
     const query = new URLSearchParams();
+    query.set("attachmentId", attachmentId);
     const resumeCursor = after ?? snapshot.cursor;
     if (resumeCursor) query.set("after", resumeCursor);
-    const suffix = query.size ? `?${query}` : "";
     const source = this.eventSourceFactory(
-      `${this.baseUrl}/threads/${encodeURIComponent(threadId)}/stream${suffix}`,
+      `${this.baseUrl}/threads/${encodeURIComponent(threadId)}/stream?${query}`,
     );
     const queue = new AsyncEventQueue<DurableThreadEvent>();
     source.addEventListener("thread-event", (event) => {
@@ -66,14 +85,31 @@ export class BrowserThreadStreamGateway implements ThreadStreamGateway {
         queue.fail(error instanceof Error ? error : new Error(String(error)));
       }
     });
+    let detached = false;
     return {
       snapshot,
       events: queue,
-      async detach() {
+      detach: async () => {
+        if (detached) return;
+        detached = true;
         source.close();
         queue.close();
+        await this.readJson(`${this.baseUrl}/threads/${encodeURIComponent(threadId)}/detach`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ attachmentId }),
+          keepalive: true,
+        });
       },
     };
+  }
+
+  async startTurn(threadId: string, message: string): Promise<void> {
+    await this.readJson(`${this.baseUrl}/threads/${encodeURIComponent(threadId)}/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
   }
 
   async steerTurn(threadId: string, turnId: string, message: string): Promise<void> {
