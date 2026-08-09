@@ -1,0 +1,14 @@
+{
+  "name": "@synaius/operai",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config ../../vite.config.ts --mode operai",
+    "build": "vite build --config ../../vite.config.ts --mode operai"
+  },
+  "dependencies": {
+    "@synaius/application": "0.0.0",
+    "@synaius/workspace-ui": "0.0.0"
+  }
+}

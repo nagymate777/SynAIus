@@ -190,6 +190,18 @@ button:disabled {
   grid-auto-rows: var(--child-cell-size);
   align-content: start;
   min-height: var(--child-cell-size);
+  pointer-events: none;
+}
+
+.box-children > .canvas-box {
+  pointer-events: auto;
+}
+
+.box-content {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: auto;
 }
 
 .system-box-action {

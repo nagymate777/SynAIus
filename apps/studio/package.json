@@ -1,0 +1,14 @@
+{
+  "name": "@synaius/studio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config ../../vite.config.ts --mode studio",
+    "build": "vite build --config ../../vite.config.ts --mode studio"
+  },
+  "dependencies": {
+    "@synaius/application": "0.0.0",
+    "@synaius/workspace-ui": "0.0.0"
+  }
+}

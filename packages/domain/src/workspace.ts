@@ -1,3 +1,5 @@
+import type { ContentInstance, JsonObject } from "@synaius/content";
+
 export type BuiltInDeviceKind = "desktop" | "tablet" | "mobile";
 
 export type LayoutId = string;
@@ -48,6 +50,7 @@ export interface BoxNode {
   childGrid: GridDefinition;
   style: BoxStyle;
   role: BoxRole;
+  contentId: string | null;
   cloneSourceId: string | null;
   cloneOrdinal: number | null;
   hiddenWhenLocked: boolean;
@@ -65,7 +68,7 @@ export interface WorkspacePreferences {
 }
 
 export interface WorkspaceState {
-  schemaVersion: 6;
+  schemaVersion: 7;
   id: string;
   revision: number;
   activeViewId: string;
@@ -75,6 +78,7 @@ export interface WorkspaceState {
   layoutOrder: LayoutId[];
   views: Record<string, WorkspaceView>;
   boxes: Record<string, BoxNode>;
+  contents: Record<string, ContentInstance>;
   preferences: WorkspacePreferences;
   localeMessages: Record<string, string>;
   globalStyle: BoxStyle;
@@ -179,6 +183,24 @@ export interface LegacyWorkspaceStateV5 {
   globalStyle: BoxStyle;
 }
 
+export type LegacyBoxNodeV6 = Omit<BoxNode, "contentId">;
+
+export interface LegacyWorkspaceStateV6 {
+  schemaVersion: 6;
+  id: string;
+  revision: number;
+  activeViewId: string;
+  activeLayout: LayoutId;
+  deviceDefaults: Record<LayoutId, string>;
+  layouts: Record<LayoutId, DeviceLayout>;
+  layoutOrder: LayoutId[];
+  views: Record<string, WorkspaceView>;
+  boxes: Record<string, LegacyBoxNodeV6>;
+  preferences: WorkspacePreferences;
+  localeMessages: Record<string, string>;
+  globalStyle: BoxStyle;
+}
+
 interface CommandEnvelope<TType extends string, TPayload> {
   id: string;
   expectedRevision: number;
@@ -198,6 +220,10 @@ export type WorkspaceCommand =
   | CommandEnvelope<"workspace.handles.set", { visible: boolean }>
   | CommandEnvelope<"workspace.names.set", { visible: boolean }>
   | CommandEnvelope<"localization.message.set", { key: string; value: string }>
+  | CommandEnvelope<"content.create", { content: Omit<ContentInstance, "revision"> }>
+  | CommandEnvelope<"content.configure", { contentId: string; configuration: JsonObject }>
+  | CommandEnvelope<"content.delete", { contentId: string }>
+  | CommandEnvelope<"box.content.attach", { boxId: string; contentId: string | null }>
   | CommandEnvelope<"box.visibility.set", { boxId: string; hiddenWhenLocked: boolean }>
   | CommandEnvelope<"box.create", { boxId: string; viewId: string; parentId: string | null; name: string; rect: GridRect }>
   | CommandEnvelope<"box.rename", { boxId: string; name: string }>
@@ -229,8 +255,8 @@ export class DomainError extends Error {
   }
 }
 
-const CLONE_NAME_KEY = "box.cloneName";
-const CLONE_NAME_NUMBERED_KEY = "box.cloneNameNumbered";
+const CLONE_NAME_KEY = "workspace.box.cloneName";
+const CLONE_NAME_NUMBERED_KEY = "workspace.box.cloneNameNumbered";
 export const BUILT_IN_LAYOUT_IDS: BuiltInDeviceKind[] = ["desktop", "tablet", "mobile"];
 const DEFAULT_CLONE_NAME_TEMPLATES: CloneNameTemplates = {
   first: `${CLONE_NAME_KEY}:{name}`,
@@ -249,9 +275,9 @@ export function createWorkspace(input: {
   const initialViewId = requiredId(input.initialViewId);
   const initialViewName = normalizedName(input.initialViewName);
   const deviceNames = input.deviceNames ?? {
-    desktop: "device.desktop",
-    tablet: "device.tablet",
-    mobile: "device.mobile",
+    desktop: "workspace.device.desktop",
+    tablet: "workspace.device.tablet",
+    mobile: "workspace.device.mobile",
   };
   const boxes: Record<string, BoxNode> = {};
   const localeMessages: Record<string, string> = {};
@@ -284,7 +310,7 @@ export function createWorkspace(input: {
     };
   }
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: workspaceId,
     revision: 0,
     activeViewId: initialViewId,
@@ -300,6 +326,7 @@ export function createWorkspace(input: {
       },
     },
     boxes,
+    contents: {},
     preferences: { handlesVisible: true, namesVisible: true },
     localeMessages,
     globalStyle: { declarations: {}, scopedCss: "" },
@@ -322,6 +349,7 @@ export function migrateWorkspaceV1(
         layoutRects: layoutRectsFrom(scaleRect(rect)),
         childGrid: { ...box.childGrid, columns: 24 },
         role: { type: "content" } as const,
+        contentId: null,
         cloneSourceId: null,
         cloneOrdinal: null,
         hiddenWhenLocked: false,
@@ -363,7 +391,7 @@ export function migrateWorkspaceV1(
   const layouts = layoutsFromBuiltInBoxes(boxes);
 
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -373,6 +401,7 @@ export function migrateWorkspaceV1(
     layoutOrder: [...BUILT_IN_LAYOUT_IDS],
     views,
     boxes,
+    contents: {},
     preferences: { handlesVisible: true, namesVisible: true },
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -391,6 +420,7 @@ export function migrateWorkspaceV2(
         ...rest,
         labelKey: box.role.type === "content" ? null : systemBoxLabelKey(box.id),
         layoutRects: layoutRectsFrom(rect),
+        contentId: null,
         cloneSourceId: null,
         cloneOrdinal: null,
         hiddenWhenLocked: false,
@@ -402,7 +432,7 @@ export function migrateWorkspaceV2(
   addCloneNameTemplates(localeMessages, cloneNameTemplates);
   const layouts = layoutsFromBuiltInBoxes(boxes);
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -412,6 +442,7 @@ export function migrateWorkspaceV2(
     layoutOrder: [...BUILT_IN_LAYOUT_IDS],
     views: structuredClone(current.views),
     boxes,
+    contents: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -428,6 +459,7 @@ export function migrateWorkspaceV3(
       return [box.id, {
         ...rest,
         labelKey: box.role.type === "content" ? null : systemBoxLabelKey(box.id),
+        contentId: null,
         cloneSourceId: null,
         cloneOrdinal: null,
         hiddenWhenLocked: false,
@@ -439,7 +471,7 @@ export function migrateWorkspaceV3(
   addCloneNameTemplates(localeMessages, cloneNameTemplates);
   const layouts = layoutsFromBuiltInBoxes(boxes);
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -449,6 +481,7 @@ export function migrateWorkspaceV3(
     layoutOrder: [...BUILT_IN_LAYOUT_IDS],
     views: structuredClone(current.views),
     boxes,
+    contents: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -462,16 +495,16 @@ export function migrateWorkspaceV4(
   const boxes: Record<string, BoxNode> = Object.fromEntries(
     Object.values(current.boxes).map((box) => {
       const { archived: _archived, ...rest } = structuredClone(box);
-      return [box.id, { ...rest, cloneSourceId: null, cloneOrdinal: null, hiddenWhenLocked: false }];
+      return [box.id, { ...rest, contentId: null, cloneSourceId: null, cloneOrdinal: null, hiddenWhenLocked: false }];
     }),
   );
   ensureBuiltInDeviceBoxes(boxes);
-  const localeMessages = structuredClone(current.localeMessages);
+  const localeMessages = namespaceWorkspaceMessages(current.localeMessages);
   addMissingBoxLocaleMessages(localeMessages, boxes);
   addCloneNameTemplates(localeMessages, cloneNameTemplates);
   const layouts = layoutsFromBuiltInBoxes(boxes);
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -481,6 +514,7 @@ export function migrateWorkspaceV4(
     layoutOrder: [...BUILT_IN_LAYOUT_IDS],
     views: structuredClone(current.views),
     boxes,
+    contents: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
@@ -491,15 +525,16 @@ export function migrateWorkspaceV5(current: LegacyWorkspaceStateV5): WorkspaceSt
   const boxes: Record<string, BoxNode> = Object.fromEntries(
     Object.values(current.boxes).map((box) => [box.id, {
       ...structuredClone(box),
+      contentId: null,
       hiddenWhenLocked: false,
     }]),
   );
   ensureBuiltInDeviceBoxes(boxes);
   const layouts = layoutsFromBuiltInBoxes(boxes);
-  const localeMessages = structuredClone(current.localeMessages);
+  const localeMessages = namespaceWorkspaceMessages(current.localeMessages);
   addMissingBoxLocaleMessages(localeMessages, boxes);
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: current.id,
     revision: current.revision,
     activeViewId: current.activeViewId,
@@ -509,9 +544,32 @@ export function migrateWorkspaceV5(current: LegacyWorkspaceStateV5): WorkspaceSt
     layoutOrder: [...BUILT_IN_LAYOUT_IDS],
     views: structuredClone(current.views),
     boxes,
+    contents: {},
     preferences: structuredClone(current.preferences),
     localeMessages,
     globalStyle: structuredClone(current.globalStyle),
+  };
+}
+
+export function migrateWorkspaceV6(current: LegacyWorkspaceStateV6): WorkspaceState {
+  const boxes = Object.fromEntries(Object.values(current.boxes).map((box) => [box.id, {
+    ...structuredClone(box),
+    labelKey: box.labelKey ? workspaceLocaleKey(box.labelKey) : null,
+    contentId: null,
+  }]));
+  const layouts = Object.fromEntries(Object.values(current.layouts).map((layout) => [layout.id, {
+    ...structuredClone(layout),
+    labelKey: workspaceLocaleKey(layout.labelKey),
+  }]));
+  const localeMessages = namespaceWorkspaceMessages(current.localeMessages);
+  addMissingBoxLocaleMessages(localeMessages, boxes);
+  return {
+    ...structuredClone(current),
+    schemaVersion: 7,
+    layouts,
+    boxes,
+    contents: {},
+    localeMessages,
   };
 }
 
@@ -596,7 +654,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
     case "layout.delete": {
       const layout = requireLayout(state, command.payload.layoutId);
       if (layout.builtIn) throw new DomainError("layout.delete.protected");
-      if (layout.id === state.activeLayout) throw new DomainError("layout.delete.active");
+      if (layout.id === state.activeLayout) throw new DomainError("workspace.layout.delete.active");
       const control = Object.values(state.boxes)
         .find((box) => box.role.type === "device" && box.role.device === layout.id);
       if (!control) throw new DomainError("layout.control.notFound");
@@ -651,6 +709,36 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       if (key === CLONE_NAME_KEY || key === CLONE_NAME_NUMBERED_KEY) recomputeCloneNames(state);
       break;
     }
+    case "content.create": {
+      const content = structuredClone(command.payload.content);
+      requiredId(content.id);
+      requiredId(content.type);
+      if (state.contents[content.id]) throw new DomainError("content.id.duplicate");
+      assertContentInstance({ ...content, revision: 0 });
+      state.contents[content.id] = { ...content, revision: 0 };
+      break;
+    }
+    case "content.configure": {
+      const content = requireContent(state, command.payload.contentId);
+      assertJsonObject(command.payload.configuration);
+      content.configuration = structuredClone(command.payload.configuration);
+      content.revision += 1;
+      break;
+    }
+    case "content.delete": {
+      const content = requireContent(state, command.payload.contentId);
+      if (Object.values(state.boxes).some((box) => box.contentId === content.id)) {
+        throw new DomainError("content.delete.inUse");
+      }
+      delete state.contents[content.id];
+      break;
+    }
+    case "box.content.attach": {
+      const box = requireContentBox(state, command.payload.boxId);
+      if (command.payload.contentId !== null) requireContent(state, command.payload.contentId);
+      box.contentId = command.payload.contentId;
+      break;
+    }
     case "box.visibility.set": {
       requireBox(state, command.payload.boxId).hiddenWhenLocked = command.payload.hiddenWhenLocked;
       break;
@@ -673,6 +761,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
         childGrid: { columns: 24, visible: false },
         style: { declarations: {}, scopedCss: "" },
         role: { type: "content" },
+        contentId: null,
         cloneSourceId: null,
         cloneOrdinal: null,
         hiddenWhenLocked: false,
@@ -762,7 +851,7 @@ export function applyWorkspaceCommand(current: WorkspaceState, command: Workspac
       const box = requireBox(state, command.payload.boxId);
       if (box.role.type !== "content") throw new DomainError("box.delete.protected");
       if (Object.values(state.boxes).some((candidate) => candidate.parentId === box.id)) {
-        throw new DomainError("box.delete.hasChildren");
+        throw new DomainError("workspace.box.delete.hasChildren");
       }
       Object.values(state.boxes)
         .filter((candidate) => candidate.cloneSourceId === box.id)
@@ -819,6 +908,7 @@ function createSystemBox(input: {
     childGrid: { columns: 24, visible: false },
     style: { declarations: {}, scopedCss: "" },
     role: input.role,
+    contentId: null,
     cloneSourceId: null,
     cloneOrdinal: null,
     hiddenWhenLocked: false,
@@ -845,6 +935,16 @@ function localeMessagesFromBoxes(boxes: Record<string, BoxNode>) {
 function addCloneNameTemplates(messages: Record<string, string>, templates: CloneNameTemplates) {
   messages[CLONE_NAME_KEY] = normalizedName(templates.first);
   messages[CLONE_NAME_NUMBERED_KEY] = normalizedName(templates.numbered);
+}
+
+function namespaceWorkspaceMessages(messages: Record<string, string>) {
+  return Object.fromEntries(Object.entries(messages).map(([key, value]) => [workspaceLocaleKey(key), value]));
+}
+
+function workspaceLocaleKey(key: string) {
+  if (key.startsWith("workspace.")) return key;
+  const ownedPrefixes = ["action", "box", "canvas", "context", "device", "layout", "snapshot", "view"];
+  return ownedPrefixes.includes(key.split(".", 1)[0]) ? `workspace.${key}` : key;
 }
 
 function layoutRectsFrom(rect: GridRect, layoutIds: LayoutId[] = BUILT_IN_LAYOUT_IDS): Record<LayoutId, GridRect> {
@@ -936,9 +1036,9 @@ function layoutsFromBuiltInBoxes(boxes: Record<string, BoxNode>): Record<LayoutI
 
 function ensureBuiltInDeviceBoxes(boxes: Record<string, BoxNode>) {
   const fallbackNames: DeviceNames = {
-    desktop: "device.desktop",
-    tablet: "device.tablet",
-    mobile: "device.mobile",
+    desktop: "workspace.device.desktop",
+    tablet: "workspace.device.tablet",
+    mobile: "workspace.device.mobile",
   };
   BUILT_IN_LAYOUT_IDS.forEach((layoutId, index) => {
     if (Object.values(boxes).some((box) => box.role.type === "device" && box.role.device === layoutId)) return;
@@ -997,6 +1097,34 @@ function requireContentBox(state: WorkspaceState, boxId: string) {
   const box = requireBox(state, boxId);
   if (box.role.type !== "content") throw new DomainError("box.content.required");
   return box;
+}
+
+function requireContent(state: WorkspaceState, contentId: string) {
+  const content = state.contents[contentId];
+  if (!content) throw new DomainError("content.notFound");
+  return content;
+}
+
+function assertContentInstance(content: ContentInstance) {
+  if (!Number.isInteger(content.rendererVersion) || content.rendererVersion < 1
+    || !Number.isInteger(content.revision) || content.revision < 0
+    || !Array.isArray(content.requiredPermissions)
+    || content.requiredPermissions.some((permission) => typeof permission !== "string" || !permission.trim())
+    || (content.sourceNodeId !== null && !content.sourceNodeId.trim())) {
+    throw new DomainError("content.invalid");
+  }
+  assertJsonObject(content.configuration);
+}
+
+function assertJsonObject(value: unknown): asserts value is JsonObject {
+  if (!isJsonValue(value) || Array.isArray(value) || value === null) throw new DomainError("content.configuration.invalid");
+}
+
+function isJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return typeof value === "object" && Object.values(value as Record<string, unknown>).every(isJsonValue);
 }
 
 function assertUniqueViewName(state: WorkspaceState, name: string, exceptId: string | null = null) {

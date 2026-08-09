@@ -4,6 +4,7 @@ import {
   migrateWorkspaceV3,
   migrateWorkspaceV4,
   migrateWorkspaceV5,
+  migrateWorkspaceV6,
   type BuiltInDeviceKind,
   type BoxNode,
   type CloneNameTemplates,
@@ -14,21 +15,19 @@ import {
   type LegacyBoxNodeV3,
   type LegacyBoxNodeV4,
   type LegacyBoxNodeV5,
+  type LegacyBoxNodeV6,
   type LegacyWorkspaceStateV1,
   type LegacyWorkspaceStateV2,
   type LegacyWorkspaceStateV3,
   type LegacyWorkspaceStateV4,
   type LegacyWorkspaceStateV5,
+  type LegacyWorkspaceStateV6,
   type WorkspaceState,
   type WorkspaceView,
 } from "@synaius/domain";
+import { isJsonObject, type ContentInstance } from "@synaius/content";
 
-export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v6";
-const V5_WORKSPACE_STORAGE_KEY = "synaius.workspace.v5";
-const V4_WORKSPACE_STORAGE_KEY = "synaius.workspace.v4";
-const V3_WORKSPACE_STORAGE_KEY = "synaius.workspace.v3";
-const V2_WORKSPACE_STORAGE_KEY = "synaius.workspace.v2";
-const V1_WORKSPACE_STORAGE_KEY = "synaius.workspace.v1";
+export const WORKSPACE_STORAGE_KEY = "synaius.workspace.v7";
 const BUILT_IN_DEVICE_KINDS: BuiltInDeviceKind[] = ["desktop", "tablet", "mobile"];
 
 export function loadWorkspace(
@@ -36,26 +35,30 @@ export function loadWorkspace(
   deviceNames: DeviceNames,
   activeLayout: LayoutId,
   cloneNameTemplates: CloneNameTemplates,
+  storageNamespace = "synaius",
 ): WorkspaceState {
   try {
-    const current: unknown = parseStoredValue(WORKSPACE_STORAGE_KEY);
+    const current: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 7));
     if (isWorkspaceState(current)) return current;
 
-    const versionFive: unknown = parseStoredValue(V5_WORKSPACE_STORAGE_KEY);
+    const versionSix: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 6));
+    if (isLegacyWorkspaceStateV6(versionSix)) return migrateWorkspaceV6(versionSix);
+
+    const versionFive: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 5));
     if (isLegacyWorkspaceStateV5(versionFive)) return migrateWorkspaceV5(versionFive);
 
-    const versionFour: unknown = parseStoredValue(V4_WORKSPACE_STORAGE_KEY);
+    const versionFour: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 4));
     if (isLegacyWorkspaceStateV4(versionFour)) return migrateWorkspaceV4(versionFour, cloneNameTemplates);
 
-    const versionThree: unknown = parseStoredValue(V3_WORKSPACE_STORAGE_KEY);
+    const versionThree: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 3));
     if (isLegacyWorkspaceStateV3(versionThree)) return migrateWorkspaceV3(versionThree, cloneNameTemplates);
 
-    const versionTwo: unknown = parseStoredValue(V2_WORKSPACE_STORAGE_KEY);
+    const versionTwo: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 2));
     if (isLegacyWorkspaceStateV2(versionTwo)) {
       return migrateWorkspaceV2(versionTwo, legacyLayoutOrDesktop(activeLayout), cloneNameTemplates);
     }
 
-    const versionOne: unknown = parseStoredValue(V1_WORKSPACE_STORAGE_KEY);
+    const versionOne: unknown = parseStoredValue(workspaceStorageKey(storageNamespace, 1));
     if (isLegacyWorkspaceState(versionOne)) {
       return migrateWorkspaceV1(versionOne, deviceNames, legacyLayoutOrDesktop(activeLayout), cloneNameTemplates);
     }
@@ -72,6 +75,7 @@ export function upgradeWorkspaceState(
   cloneNameTemplates: CloneNameTemplates,
 ): WorkspaceState | null {
   if (isWorkspaceState(value)) return value;
+  if (isLegacyWorkspaceStateV6(value)) return migrateWorkspaceV6(value);
   if (isLegacyWorkspaceStateV5(value)) return migrateWorkspaceV5(value);
   if (isLegacyWorkspaceStateV4(value)) return migrateWorkspaceV4(value, cloneNameTemplates);
   if (isLegacyWorkspaceStateV3(value)) return migrateWorkspaceV3(value, cloneNameTemplates);
@@ -84,9 +88,9 @@ export function upgradeWorkspaceState(
   return null;
 }
 
-export function saveWorkspace(workspace: WorkspaceState) {
+export function saveWorkspace(workspace: WorkspaceState, storageNamespace = "synaius") {
   try {
-    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
+    localStorage.setItem(workspaceStorageKey(storageNamespace, 7), JSON.stringify(workspace));
   } catch {
     return false;
   }
@@ -94,7 +98,7 @@ export function saveWorkspace(workspace: WorkspaceState) {
 }
 
 export function isWorkspaceState(value: unknown): value is WorkspaceState {
-  if (!isWorkspaceBase(value) || value.schemaVersion !== 6 || typeof value.activeLayout !== "string") return false;
+  if (!isWorkspaceBase(value) || value.schemaVersion !== 7 || typeof value.activeLayout !== "string") return false;
   if (!isDeviceLayouts(value.layouts) || !isLayoutOrder(value.layoutOrder, value.layouts)) return false;
   const layouts = value.layouts;
   if (!BUILT_IN_DEVICE_KINDS.every((layoutId) => layouts[layoutId]?.builtIn)
@@ -104,8 +108,10 @@ export function isWorkspaceState(value: unknown): value is WorkspaceState {
   if (!hasCompleteLayoutDefaults(value, layouts) || !isWorkspacePreferences(value.preferences)) return false;
   const localeMessages = value.localeMessages;
   if (!isStringRecord(localeMessages)
-    || typeof localeMessages["box.cloneName"] !== "string"
-    || typeof localeMessages["box.cloneNameNumbered"] !== "string") return false;
+    || typeof localeMessages["workspace.box.cloneName"] !== "string"
+    || typeof localeMessages["workspace.box.cloneNameNumbered"] !== "string") return false;
+  if (!isRecord(value.contents)
+    || !Object.entries(value.contents).every(([contentId, content]) => isContentInstance(content) && content.id === contentId)) return false;
 
   const layoutIds = Object.keys(layouts);
   const boxes = Object.values(value.boxes);
@@ -117,8 +123,29 @@ export function isWorkspaceState(value: unknown): value is WorkspaceState {
     && cloneReferenceIsValid(candidate, box)
     && (box.role.type === "content"
       ? box.labelKey === null
-      : typeof box.labelKey === "string" && typeof localeMessages[box.labelKey] === "string"))
+      : box.contentId === null
+        && typeof box.labelKey === "string"
+        && typeof localeMessages[box.labelKey] === "string")
+    && (box.contentId === null || Object.prototype.hasOwnProperty.call(candidate.contents, box.contentId)))
     && layoutsHaveValidControls(candidate);
+}
+
+export function isLegacyWorkspaceStateV6(value: unknown): value is LegacyWorkspaceStateV6 {
+  if (!isWorkspaceBase(value) || value.schemaVersion !== 6 || typeof value.activeLayout !== "string") return false;
+  if (!isDeviceLayouts(value.layouts) || !isLayoutOrder(value.layoutOrder, value.layouts)) return false;
+  const layouts = value.layouts;
+  if (!BUILT_IN_DEVICE_KINDS.every((layoutId) => layouts[layoutId]?.builtIn)
+    || !Object.prototype.hasOwnProperty.call(layouts, value.activeLayout)
+    || !hasCompleteLayoutDefaults(value, layouts)
+    || !isWorkspacePreferences(value.preferences)
+    || !isStringRecord(value.localeMessages)) return false;
+  const layoutIds = Object.keys(layouts);
+  const boxes = Object.values(value.boxes);
+  if (!boxes.every((box) => isLegacyBoxNodeV6(box, layoutIds))) return false;
+  const candidate = value as unknown as LegacyWorkspaceStateV6;
+  return (boxes as LegacyBoxNodeV6[]).every((box) => referencesAreValid(candidate, box)
+    && boxRoleReferenceIsValid(candidate as unknown as WorkspaceState, box as BoxNode)
+    && legacyV6CloneReferenceIsValid(candidate, box));
 }
 
 export function isLegacyWorkspaceStateV5(value: unknown): value is LegacyWorkspaceStateV5 {
@@ -173,6 +200,10 @@ function parseStoredValue(key: string): unknown {
   return raw === null ? null : JSON.parse(raw);
 }
 
+function workspaceStorageKey(storageNamespace: string, version: number) {
+  return `${storageNamespace}.workspace.v${version}`;
+}
+
 function isWorkspaceBase(value: unknown): value is Record<string, unknown> & {
   id: string;
   revision: number;
@@ -195,7 +226,7 @@ function isWorkspaceBase(value: unknown): value is Record<string, unknown> & {
 
 function referencesAreValid(
   workspace: { views: Record<string, WorkspaceView>; boxes: Record<string, unknown> },
-  box: BoxNode | LegacyBoxNodeV2 | LegacyBoxNodeV3 | LegacyBoxNodeV4 | LegacyBoxNodeV5,
+  box: BoxNode | LegacyBoxNodeV2 | LegacyBoxNodeV3 | LegacyBoxNodeV4 | LegacyBoxNodeV5 | LegacyBoxNodeV6,
 ) {
   if (box.viewId !== null && !Object.prototype.hasOwnProperty.call(workspace.views, box.viewId)) return false;
   if (box.parentId !== null && !Object.prototype.hasOwnProperty.call(workspace.boxes, box.parentId)) return false;
@@ -216,7 +247,22 @@ function isBoxNode(value: unknown, layoutIds: string[]): value is BoxNode {
     && isBoxRole(value.role)
     && (value.labelKey === null || typeof value.labelKey === "string")
     && isLayoutRects(value.layoutRects, layoutIds)
+    && (value.contentId === null || (typeof value.contentId === "string" && value.contentId.length > 0))
     && typeof value.hiddenWhenLocked === "boolean"
+    && ((value.cloneSourceId === null && value.cloneOrdinal === null)
+      || (typeof value.cloneSourceId === "string"
+        && Number.isInteger(value.cloneOrdinal)
+        && (value.cloneOrdinal as number) > 0));
+}
+
+function isLegacyBoxNodeV6(value: unknown, layoutIds: string[]): value is LegacyBoxNodeV6 {
+  return isCommonBoxNodeBase(value)
+    && (value.viewId === null || typeof value.viewId === "string")
+    && isBoxRole(value.role)
+    && (value.labelKey === null || typeof value.labelKey === "string")
+    && isLayoutRects(value.layoutRects, layoutIds)
+    && typeof value.hiddenWhenLocked === "boolean"
+    && !Object.prototype.hasOwnProperty.call(value, "contentId")
     && ((value.cloneSourceId === null && value.cloneOrdinal === null)
       || (typeof value.cloneSourceId === "string"
         && Number.isInteger(value.cloneOrdinal)
@@ -397,6 +443,15 @@ function legacyCloneReferenceIsValid(
   return Boolean(source && source.role.type === "content" && source.cloneSourceId === null);
 }
 
+function legacyV6CloneReferenceIsValid(
+  workspace: { boxes: Record<string, unknown> },
+  box: LegacyBoxNodeV6,
+) {
+  if (box.cloneSourceId === null) return box.cloneOrdinal === null;
+  const source = workspace.boxes[box.cloneSourceId] as LegacyBoxNodeV6 | undefined;
+  return Boolean(source && source.role.type === "content" && source.cloneSourceId === null);
+}
+
 function boxRoleReferenceIsValid(workspace: WorkspaceState, box: BoxNode) {
   return box.role.type !== "device" || Object.prototype.hasOwnProperty.call(workspace.layouts, box.role.device);
 }
@@ -430,4 +485,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function isContentInstance(value: unknown): value is ContentInstance {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.type === "string"
+    && Number.isInteger(value.rendererVersion)
+    && (value.rendererVersion as number) > 0
+    && Number.isInteger(value.revision)
+    && (value.revision as number) >= 0
+    && isJsonObject(value.configuration)
+    && Array.isArray(value.requiredPermissions)
+    && value.requiredPermissions.every((permission) => typeof permission === "string" && permission.length > 0)
+    && (value.sourceNodeId === null || (typeof value.sourceNodeId === "string" && value.sourceNodeId.length > 0));
 }

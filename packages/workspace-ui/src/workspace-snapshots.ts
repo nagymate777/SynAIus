@@ -14,9 +14,10 @@ export function loadWorkspaceSnapshots(
   deviceNames: DeviceNames,
   activeLayout: LayoutId,
   cloneNameTemplates: CloneNameTemplates,
+  storageNamespace = "synaius",
 ): WorkspaceSnapshot[] {
   try {
-    const raw = localStorage.getItem(WORKSPACE_SNAPSHOTS_STORAGE_KEY);
+    const raw = localStorage.getItem(snapshotStorageKey(storageNamespace));
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -30,13 +31,17 @@ export function loadWorkspaceSnapshots(
   }
 }
 
-export function saveWorkspaceSnapshots(snapshots: WorkspaceSnapshot[]) {
+export function saveWorkspaceSnapshots(snapshots: WorkspaceSnapshot[], storageNamespace = "synaius") {
   try {
-    localStorage.setItem(WORKSPACE_SNAPSHOTS_STORAGE_KEY, JSON.stringify(snapshots));
+    localStorage.setItem(snapshotStorageKey(storageNamespace), JSON.stringify(snapshots));
     return true;
   } catch {
     return false;
   }
+}
+
+function snapshotStorageKey(storageNamespace: string) {
+  return `${storageNamespace}.workspace-snapshots.v1`;
 }
 
 export function createWorkspaceSnapshot(workspace: WorkspaceState, name: string): WorkspaceSnapshot {

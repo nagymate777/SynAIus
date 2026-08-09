@@ -5,7 +5,7 @@ import {
   createEditorState,
   redoEditorState,
   undoEditorState,
-} from "../apps/portal/src/editor-history";
+} from "@synaius/workspace-ui";
 
 function applyCommand<T extends WorkspaceCommand["type"]>(
   workspace: ReturnType<typeof createWorkspace>,

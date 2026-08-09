@@ -29,7 +29,7 @@ describe("workspace command core", () => {
   it("creates protected global view and device control boxes on the dense grid", () => {
     const state = initial();
     const systemBoxes = Object.values(state.boxes).filter((box) => box.role.type !== "content");
-    expect(state.schemaVersion).toBe(6);
+    expect(state.schemaVersion).toBe(7);
     expect(state.activeLayout).toBe("desktop");
     expect(state.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(state.views.main.grid.columns).toBe(24);
@@ -178,7 +178,7 @@ describe("workspace command core", () => {
     });
     state = apply(state, {
       type: "localization.message.set",
-      payload: { key: "box.cloneName", value: "{name} másolata" },
+      payload: { key: "workspace.box.cloneName", value: "{name} másolata" },
     });
     expect(state.boxes["child-clone"].name).toBe("Gyermek másolata");
   });
@@ -275,7 +275,7 @@ describe("workspace command core", () => {
     });
     state = apply(state, { type: "layout.activate", payload: { layoutId: "custom:wall" } });
     expect(() => apply(state, { type: "layout.delete", payload: { layoutId: "custom:wall" } }))
-      .toThrowError(new DomainError("layout.delete.active"));
+      .toThrowError(new DomainError("workspace.layout.delete.active"));
     state = apply(state, { type: "layout.activate", payload: { layoutId: "desktop" } });
     state = apply(state, { type: "layout.delete", payload: { layoutId: "custom:wall" } });
     expect(state.layouts["custom:wall"]).toBeUndefined();
@@ -339,10 +339,53 @@ describe("workspace command core", () => {
     expect(() => apply(state, {
       type: "box.delete",
       payload: { boxId: "parent" },
-    })).toThrowError(new DomainError("box.delete.hasChildren"));
+    })).toThrowError(new DomainError("workspace.box.delete.hasChildren"));
 
     state = apply(state, { type: "box.delete", payload: { boxId: "child" } });
     expect(state.boxes.child).toBeUndefined();
     expect(state.boxes.parent).toBeDefined();
+  });
+
+  it("keeps content instances separate from box geometry and shares them with clones", () => {
+    let state = withTwoBoxes();
+    state = apply(state, {
+      type: "content.create",
+      payload: {
+        content: {
+          id: "content:panel",
+          type: "core.html",
+          rendererVersion: 1,
+          configuration: { document: "<p></p>" },
+          requiredPermissions: [],
+          sourceNodeId: null,
+        },
+      },
+    });
+    state = apply(state, {
+      type: "box.content.attach",
+      payload: { boxId: "child", contentId: "content:panel" },
+    });
+    state = apply(state, {
+      type: "box.clonePaste",
+      payload: {
+        sourceBoxId: "child",
+        targetViewId: "main",
+        layout: "desktop",
+        rect: { column: 12, row: 4, width: 3, height: 3 },
+        idMap: { child: "child-clone" },
+      },
+    });
+    expect(state.boxes.child.contentId).toBe("content:panel");
+    expect(state.boxes["child-clone"].contentId).toBe("content:panel");
+
+    state = apply(state, {
+      type: "content.configure",
+      payload: { contentId: "content:panel", configuration: { document: "<section></section>" } },
+    });
+    expect(state.contents["content:panel"].revision).toBe(1);
+    expect(() => apply(state, {
+      type: "content.delete",
+      payload: { contentId: "content:panel" },
+    })).toThrowError(new DomainError("content.delete.inUse"));
   });
 });

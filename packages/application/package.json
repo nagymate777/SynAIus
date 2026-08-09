@@ -1,10 +1,10 @@
 {
-  "name": "@synaius/domain",
+  "name": "@synaius/application",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@synaius/content": "0.0.0"
+    "@synaius/i18n": "0.0.0"
   }
 }

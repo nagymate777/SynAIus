@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { zoomViewportAt } from "../apps/portal/src/canvas-viewport";
+import { zoomViewportAt } from "@synaius/workspace-ui";
 
 describe("canvas viewport", () => {
   it("keeps the world point under the pointer stable while zooming", () => {

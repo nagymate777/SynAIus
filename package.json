@@ -6,16 +6,21 @@
   "workspaces": [
     "apps/*",
     "packages/*",
+    "modules/*",
     "mcp/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace @synaius/portal",
-    "build": "npm run build --workspace @synaius/portal",
+    "dev": "npm run dev --workspace @synaius/studio",
+    "dev:operai": "npm run dev --workspace @synaius/operai",
+    "build:studio": "npm run build --workspace @synaius/studio",
+    "build:operai": "npm run build --workspace @synaius/operai",
+    "build": "npm run build:studio && npm run build:operai",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "check": "npm run check:secrets && npm run check:i18n && npm run typecheck && npm run test && npm run build"
+    "check": "npm run check:secrets && npm run check:i18n && npm run check:boundaries && npm run typecheck && npm run test && npm run build"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

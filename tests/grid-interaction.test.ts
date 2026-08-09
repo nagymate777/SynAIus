@@ -8,7 +8,7 @@ import {
   resizeRectFromEnd,
   resizeRectFromStart,
   type GridMetrics,
-} from "../apps/portal/src/grid-interaction";
+} from "@synaius/workspace-ui";
 
 const metrics: GridMetrics = {
   columns: 12,

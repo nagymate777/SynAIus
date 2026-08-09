@@ -6,7 +6,10 @@ import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   WheelEvent as ReactWheelEvent,
+  ReactNode,
 } from "react";
+import type { SynAIusApplicationManifest } from "@synaius/application";
+import type { ContentRegistry } from "@synaius/content";
 import {
   applyWorkspaceCommand,
   createWorkspace,
@@ -22,7 +25,6 @@ import {
   type WorkspaceState,
 } from "@synaius/domain";
 import { createTranslator } from "@synaius/i18n";
-import hu from "../../../locales/hu.json";
 import {
   gridDeltaFromClient,
   gridPointFromClient,
@@ -61,17 +63,6 @@ import {
   zoomViewportAt,
   type CanvasViewport,
 } from "./canvas-viewport";
-
-const t = createTranslator(hu);
-const deviceNames: DeviceNames = {
-  desktop: t("device.desktop"),
-  tablet: t("device.tablet"),
-  mobile: t("device.mobile"),
-};
-const cloneNameTemplates: CloneNameTemplates = {
-  first: t("box.cloneName", { name: "{name}" }),
-  numbered: t("box.cloneNameNumbered", { name: "{name}", count: "{count}" }),
-};
 
 type DragMode = "move" | "resize-start" | "resize-end";
 type ContextMode = "actions" | "rename" | "label" | "delete" | "add-layout" | "delete-layout" | "copy-layout" | "snapshots" | "import";
@@ -123,14 +114,36 @@ type CanvasStyle = CSSProperties & {
 };
 type CanvasWorldStyle = CSSProperties & { transform: string };
 
-export function App() {
-  const [editor, setEditor] = useState<EditorState>(() => createEditorState(createInitialWorkspace()));
+export interface WorkspaceContentRenderContext {
+  box: BoxNode;
+  workspace: WorkspaceState;
+}
+
+export interface WorkspaceApplicationProps {
+  application: Readonly<SynAIusApplicationManifest>;
+  contentRegistry?: ContentRegistry<ReactNode, WorkspaceContentRenderContext>;
+}
+
+export function WorkspaceApplication({ application, contentRegistry }: WorkspaceApplicationProps) {
+  const t = useMemo(() => createTranslator(application.localeMessages), [application]);
+  const deviceNames = useMemo<DeviceNames>(() => ({
+    desktop: t("workspace.device.desktop"),
+    tablet: t("workspace.device.tablet"),
+    mobile: t("workspace.device.mobile"),
+  }), [t]);
+  const cloneNameTemplates = useMemo<CloneNameTemplates>(() => ({
+    first: t("workspace.box.cloneName", { name: "{name}" }),
+    numbered: t("workspace.box.cloneNameNumbered", { name: "{name}", count: "{count}" }),
+  }), [t]);
+  const [editor, setEditor] = useState<EditorState>(() => createEditorState(
+    createInitialWorkspace(application, t, deviceNames, cloneNameTemplates),
+  ));
   const workspace = editor.workspace;
   const activeView = workspace.views[workspace.activeViewId];
   const viewportStorageKey = canvasViewportKey(activeView.id, workspace.activeLayout);
-  const [viewports, setViewports] = useState(loadCanvasViewports);
+  const [viewports, setViewports] = useState(() => loadCanvasViewports(application.storageNamespace));
   const [snapshots, setSnapshots] = useState<WorkspaceSnapshot[]>(() =>
-    loadWorkspaceSnapshots(deviceNames, workspace.activeLayout, cloneNameTemplates));
+    loadWorkspaceSnapshots(deviceNames, workspace.activeLayout, cloneNameTemplates, application.storageNamespace));
   const [drag, setDrag] = useState<DragState | null>(null);
   const [panDrag, setPanDrag] = useState<PanDragState | null>(null);
   const [clipboard, setClipboard] = useState<BoxClipboard | null>(null);
@@ -148,19 +161,19 @@ export function App() {
   workspaceRef.current = workspace;
   viewportRef.current = viewport;
 
-  document.title = t("app.title");
+  document.title = t(application.titleKey);
 
   useEffect(() => {
-    saveWorkspace(workspace);
-  }, [workspace]);
+    saveWorkspace(workspace, application.storageNamespace);
+  }, [application.storageNamespace, workspace]);
 
   useEffect(() => {
-    saveWorkspaceSnapshots(snapshots);
-  }, [snapshots]);
+    saveWorkspaceSnapshots(snapshots, application.storageNamespace);
+  }, [application.storageNamespace, snapshots]);
 
   useEffect(() => {
-    saveCanvasViewports(viewports);
-  }, [viewports]);
+    saveCanvasViewports(viewports, application.storageNamespace);
+  }, [application.storageNamespace, viewports]);
 
   useEffect(() => {
     if (clipboard && (!workspace.boxes[clipboard.boxId]
@@ -313,7 +326,7 @@ export function App() {
   }
 
   function createSnapshot() {
-    const name = nextAvailableName("snapshot.generatedName", snapshots.map((snapshot) => snapshot.name));
+    const name = nextAvailableName(t, "workspace.snapshot.generatedName", snapshots.map((snapshot) => snapshot.name));
     setSnapshots((current) => [createWorkspaceSnapshot(workspace, name), ...current].slice(0, 30));
     setContext(null);
   }
@@ -375,7 +388,7 @@ export function App() {
   function addView() {
     commitWorkspace((current) => {
       const viewId = crypto.randomUUID();
-      const name = nextAvailableName("view.generatedName", Object.values(current.views).map((view) => view.name));
+      const name = nextAvailableName(t, "workspace.view.generatedName", Object.values(current.views).map((view) => view.name));
       const created = applyWorkspaceCommand(current, {
         id: crypto.randomUUID(),
         expectedRevision: current.revision,
@@ -427,7 +440,7 @@ export function App() {
           boxId: crypto.randomUUID(),
           viewId: view.id,
           parentId,
-          name: nextAvailableName("box.generatedName", occupiedNames),
+          name: nextAvailableName(t, "workspace.box.generatedName", occupiedNames),
           rect: rectAtPoint(point ?? fallbackPoint, 6, 4, columns),
         },
       }).state;
@@ -748,12 +761,12 @@ export function App() {
       >
         <button
           className="handle handle-start"
-          aria-label={t("box.handle.start")}
+          aria-label={t("workspace.box.handle.start")}
           onPointerDown={(event) => beginDrag(event, box, "resize-start")}
         />
         <strong className="box-name">{box.name}</strong>
         {workspace.preferences.handlesVisible && box.hiddenWhenLocked && (
-          <span className="box-visibility-state">{t("box.hiddenWhenLocked")}</span>
+          <span className="box-visibility-state">{t("workspace.box.hiddenWhenLocked")}</span>
         )}
         {box.role.type !== "content" && (
           <button
@@ -770,6 +783,11 @@ export function App() {
             <span className="system-box-label">{label}</span>
           </button>
         )}
+        {box.role.type === "content" && box.contentId && contentRegistry && (
+          <div className="box-content" data-content-id={box.contentId}>
+            {contentRegistry.render(workspace.contents[box.contentId], { box, workspace })}
+          </div>
+        )}
         <div
           className="box-children"
           data-child-grid={box.id}
@@ -779,7 +797,7 @@ export function App() {
         </div>
         <button
           className="handle handle-end"
-          aria-label={t("box.handle.end")}
+          aria-label={t("workspace.box.handle.end")}
           onPointerDown={(event) => beginDrag(event, box, "resize-end")}
         />
       </article>
@@ -802,7 +820,7 @@ export function App() {
           "--grid-offset-x": `${viewport.panX}px`,
           "--grid-offset-y": `${viewport.panY}px`,
         } as CanvasStyle}
-        aria-label={t("canvas.label")}
+        aria-label={t("workspace.canvas.label")}
         onContextMenu={openCanvasContext}
         onPointerDown={beginCanvasPointer}
         onWheel={zoomCanvas}
@@ -830,7 +848,7 @@ export function App() {
               <>
                 {workspace.preferences.handlesVisible && clipboard && (
                   <button role="menuitem" onClick={pasteClipboard}>
-                    {t(clipboard.mode === "cut" ? "action.pasteCut" : "action.pasteClone")}
+                    {t(clipboard.mode === "cut" ? "workspace.action.pasteCut" : "workspace.action.pasteClone")}
                   </button>
                 )}
                 {workspace.preferences.handlesVisible && clipboard && (
@@ -841,7 +859,7 @@ export function App() {
                       setContext(null);
                     }}
                   >
-                    {t(clipboard.mode === "cut" ? "action.cancelCut" : "action.cancelClone")}
+                    {t(clipboard.mode === "cut" ? "workspace.action.cancelCut" : "workspace.action.cancelClone")}
                   </button>
                 )}
                 {workspace.preferences.handlesVisible && (
@@ -852,25 +870,25 @@ export function App() {
                       contextBox?.role.type === "content" ? { column: 0, row: 0 } : context.point,
                     )}
                   >
-                    {t(contextBox?.role.type === "content" ? "context.addInside" : "action.addBox")}
+                    {t(contextBox?.role.type === "content" ? "workspace.context.addInside" : "workspace.action.addBox")}
                   </button>
                 )}
                 {workspace.preferences.handlesVisible && (
                   <>
-                    <button role="menuitem" onClick={addView}>{t("action.addView")}</button>
+                    <button role="menuitem" onClick={addView}>{t("workspace.action.addView")}</button>
                     <button
                       role="menuitem"
                       onClick={() => setContext({
                         ...context,
                         mode: "add-layout",
-                        draftName: nextAvailableName(
-                          "layout.generatedName",
+                        draftName: nextAvailableName(t,
+                          "workspace.layout.generatedName",
                           Object.values(workspace.layouts).map((layout) => layout.name),
                         ),
                         sourceLayoutId: workspace.activeLayout,
                       })}
                     >
-                      {t("action.addLayout")}
+                      {t("workspace.action.addLayout")}
                     </button>
                     <button
                       role="menuitem"
@@ -879,16 +897,16 @@ export function App() {
                         setContext(null);
                       }}
                     >
-                      {t(activeView.grid.visible ? "action.hideGrid" : "action.showGrid")}
+                      {t(activeView.grid.visible ? "workspace.action.hideGrid" : "workspace.action.showGrid")}
                     </button>
                     <button role="menuitem" disabled={editor.undo.length === 0} onClick={undoWorkspace}>
-                      {t("action.undo")}
+                      {t("workspace.action.undo")}
                     </button>
                     <button role="menuitem" disabled={editor.redo.length === 0} onClick={redoWorkspace}>
-                      {t("action.redo")}
+                      {t("workspace.action.redo")}
                     </button>
                     <button role="menuitem" onClick={() => setContext({ ...context, mode: "copy-layout" })}>
-                      {t(contextBox ? "action.copyBoxLayout" : "action.copyViewLayout")}
+                      {t(contextBox ? "workspace.action.copyBoxLayout" : "workspace.action.copyViewLayout")}
                     </button>
                   </>
                 )}
@@ -901,7 +919,7 @@ export function App() {
                     setContext(null);
                   }}
                 >
-                  {t(workspace.preferences.handlesVisible ? "action.lockEditing" : "action.unlockEditing")}
+                  {t(workspace.preferences.handlesVisible ? "workspace.action.lockEditing" : "workspace.action.unlockEditing")}
                 </button>
                 <button
                   role="menuitem"
@@ -910,16 +928,16 @@ export function App() {
                     setContext(null);
                   }}
                 >
-                  {t(workspace.preferences.namesVisible ? "action.hideNames" : "action.showNames")}
+                  {t(workspace.preferences.namesVisible ? "workspace.action.hideNames" : "workspace.action.showNames")}
                 </button>
-                <button role="menuitem" onClick={createSnapshot}>{t("action.createSnapshot")}</button>
+                <button role="menuitem" onClick={createSnapshot}>{t("workspace.action.createSnapshot")}</button>
                 <button role="menuitem" onClick={() => setContext({ ...context, mode: "snapshots" })}>
-                  {t("action.manageSnapshots", { count: snapshots.length })}
+                  {t("workspace.action.manageSnapshots", { count: snapshots.length })}
                 </button>
-                <button role="menuitem" onClick={exportWorkspace}>{t("action.exportWorkspace")}</button>
+                <button role="menuitem" onClick={exportWorkspace}>{t("workspace.action.exportWorkspace")}</button>
                 {workspace.preferences.handlesVisible && (
                   <button role="menuitem" onClick={() => setContext({ ...context, mode: "import", errorKey: null })}>
-                    {t("action.importWorkspace")}
+                    {t("workspace.action.importWorkspace")}
                   </button>
                 )}
 
@@ -938,17 +956,17 @@ export function App() {
                           setContext(null);
                         }}
                       >
-                        {t("action.setDefaultView", { layout: localizedLayoutLabel(workspace, workspace.activeLayout) })}
+                        {t("workspace.action.setDefaultView", { layout: localizedLayoutLabel(workspace, workspace.activeLayout) })}
                       </button>
                     )}
                     {!contextBox.cloneSourceId && (
                       <button role="menuitem" onClick={() => setContext({ ...context, mode: "rename" })}>
-                        {t("action.renameBox")}
+                        {t("workspace.action.renameBox")}
                       </button>
                     )}
                     {contextBox.labelKey && (
                       <button role="menuitem" onClick={() => setContext({ ...context, mode: "label" })}>
-                        {t("action.editBoxLabel")}
+                        {t("workspace.action.editBoxLabel")}
                       </button>
                     )}
                     <button
@@ -962,7 +980,7 @@ export function App() {
                         setContext(null);
                       }}
                     >
-                      {t(contextBox.hiddenWhenLocked ? "action.showWhenLocked" : "action.hideWhenLocked")}
+                      {t(contextBox.hiddenWhenLocked ? "workspace.action.showWhenLocked" : "workspace.action.hideWhenLocked")}
                     </button>
                     {contextBox.role.type === "content" && (
                       <>
@@ -970,13 +988,13 @@ export function App() {
                         role="menuitem"
                         onClick={() => selectClipboard("cut", contextBox.id)}
                       >
-                        {t("action.cutBox")}
+                        {t("workspace.action.cutBox")}
                       </button>
                       <button
                         role="menuitem"
                         onClick={() => selectClipboard("clone", contextBox.id)}
                       >
-                        {t("action.cloneBox")}
+                        {t("workspace.action.cloneBox")}
                       </button>
                       </>
                     )}
@@ -984,10 +1002,10 @@ export function App() {
                       <button
                         role="menuitem"
                         disabled={contextBoxHasChildren}
-                        title={contextBoxHasChildren ? t("box.delete.hasChildren") : undefined}
+                        title={contextBoxHasChildren ? t("workspace.box.delete.hasChildren") : undefined}
                         onClick={() => setContext({ ...context, mode: "delete" })}
                       >
-                        {t("action.deleteBox")}
+                        {t("workspace.action.deleteBox")}
                       </button>
                     )}
                     {contextBox.role.type === "device" && !workspace.layouts[contextBox.role.device]?.builtIn && (
@@ -995,11 +1013,11 @@ export function App() {
                         role="menuitem"
                         disabled={workspace.activeLayout === contextBox.role.device}
                         title={workspace.activeLayout === contextBox.role.device
-                          ? t("layout.delete.active")
+                          ? t("workspace.layout.delete.active")
                           : undefined}
                         onClick={() => setContext({ ...context, mode: "delete-layout" })}
                       >
-                        {t("action.deleteLayout")}
+                        {t("workspace.action.deleteLayout")}
                       </button>
                     )}
                   </>
@@ -1009,7 +1027,7 @@ export function App() {
 
             {context.mode === "rename" && contextBox && (
               <form onSubmit={renameBox}>
-                <label htmlFor="box-name">{t("box.rename.label")}</label>
+                <label htmlFor="box-name">{t("workspace.box.rename.label")}</label>
                 <input
                   id="box-name"
                   autoFocus
@@ -1017,15 +1035,15 @@ export function App() {
                   onChange={(event) => setContext({ ...context, draftName: event.target.value })}
                 />
                 <div className="context-actions">
-                  <button type="submit">{t("action.save")}</button>
-                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                  <button type="submit">{t("workspace.action.save")}</button>
+                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.cancel")}</button>
                 </div>
               </form>
             )}
 
             {context.mode === "label" && contextBox?.labelKey && (
               <form onSubmit={editBoxLabel}>
-                <label htmlFor="box-label">{t("box.label.edit")}</label>
+                <label htmlFor="box-label">{t("workspace.box.label.edit")}</label>
                 <textarea
                   id="box-label"
                   autoFocus
@@ -1034,23 +1052,23 @@ export function App() {
                   onChange={(event) => setContext({ ...context, draftLabel: event.target.value })}
                 />
                 <div className="context-actions">
-                  <button type="submit">{t("action.save")}</button>
-                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                  <button type="submit">{t("workspace.action.save")}</button>
+                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.cancel")}</button>
                 </div>
               </form>
             )}
 
             {context.mode === "add-layout" && (
               <form onSubmit={addLayout}>
-                <p>{t("layout.create.title")}</p>
-                <label htmlFor="layout-name">{t("layout.create.name")}</label>
+                <p>{t("workspace.layout.create.title")}</p>
+                <label htmlFor="layout-name">{t("workspace.layout.create.name")}</label>
                 <input
                   id="layout-name"
                   autoFocus
                   value={context.draftName}
                   onChange={(event) => setContext({ ...context, draftName: event.target.value })}
                 />
-                <label htmlFor="layout-source">{t("layout.create.source")}</label>
+                <label htmlFor="layout-source">{t("workspace.layout.create.source")}</label>
                 <select
                   id="layout-source"
                   value={context.sourceLayoutId}
@@ -1061,15 +1079,15 @@ export function App() {
                   ))}
                 </select>
                 <div className="context-actions">
-                  <button type="submit">{t("action.createLayout")}</button>
-                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                  <button type="submit">{t("workspace.action.createLayout")}</button>
+                  <button type="button" onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.cancel")}</button>
                 </div>
               </form>
             )}
 
             {context.mode === "copy-layout" && (
               <div>
-                <p>{t(contextBox ? "layout.copyBoxPrompt" : "layout.copyViewPrompt", {
+                <p>{t(contextBox ? "workspace.layout.copyBoxPrompt" : "workspace.layout.copyViewPrompt", {
                   layout: localizedLayoutLabel(workspace, workspace.activeLayout),
                 })}</p>
                 <div className="context-stack">
@@ -1077,19 +1095,19 @@ export function App() {
                     .filter((layoutId) => layoutId !== workspace.activeLayout)
                     .map((layoutId) => (
                       <button key={layoutId} onClick={() => copyLayout(layoutId)}>
-                        {t("layout.copyTo", { layout: localizedLayoutLabel(workspace, layoutId) })}
+                        {t("workspace.layout.copyTo", { layout: localizedLayoutLabel(workspace, layoutId) })}
                       </button>
                     ))}
-                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.cancel")}</button>
                 </div>
               </div>
             )}
 
             {context.mode === "snapshots" && (
               <div>
-                <p>{t("snapshot.title")}</p>
+                <p>{t("workspace.snapshot.title")}</p>
                 {snapshots.length === 0 ? (
-                  <p>{t("snapshot.empty")}</p>
+                  <p>{t("workspace.snapshot.empty")}</p>
                 ) : (
                   <div className="snapshot-list">
                     {snapshots.map((snapshot) => (
@@ -1101,14 +1119,14 @@ export function App() {
                           <span>{snapshot.name}</span>
                           <small>{formatSnapshotDate(snapshot.createdAt)}</small>
                         </button>
-                        <button className="danger" aria-label={t("snapshot.delete", { name: snapshot.name })} onClick={() => deleteSnapshot(snapshot.id)}>
-                          {t("action.deleteSnapshot")}
+                        <button className="danger" aria-label={t("workspace.snapshot.delete", { name: snapshot.name })} onClick={() => deleteSnapshot(snapshot.id)}>
+                          {t("workspace.action.deleteSnapshot")}
                         </button>
                       </div>
                     ))}
                   </div>
                 )}
-                <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.back")}</button>
+                <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.back")}</button>
               </div>
             )}
 
@@ -1124,13 +1142,13 @@ export function App() {
                   />
                 </label>
                 {context.errorKey && <p className="context-error">{t(context.errorKey)}</p>}
-                <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.cancel")}</button>
               </div>
             )}
 
             {context.mode === "delete" && contextBox && !isProtectedBox(contextBox) && (
               <div>
-                <p>{t("box.delete.confirm", { name: contextBox.name })}</p>
+                <p>{t("workspace.box.delete.confirm", { name: contextBox.name })}</p>
                 <div className="context-actions">
                   <button
                     className="danger"
@@ -1139,9 +1157,9 @@ export function App() {
                       setContext(null);
                     }}
                   >
-                    {t("action.deleteBox")}
+                    {t("workspace.action.deleteBox")}
                   </button>
-                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.cancel")}</button>
                 </div>
               </div>
             )}
@@ -1150,7 +1168,7 @@ export function App() {
               && contextBox?.role.type === "device"
               && !workspace.layouts[contextBox.role.device]?.builtIn && (
               <div>
-                <p>{t("layout.delete.confirm", {
+                <p>{t("workspace.layout.delete.confirm", {
                   name: localizedLayoutLabel(workspace, contextBox.role.device),
                 })}</p>
                 <div className="context-actions">
@@ -1162,9 +1180,9 @@ export function App() {
                       setContext(null);
                     }}
                   >
-                    {t("action.deleteLayout")}
+                    {t("workspace.action.deleteLayout")}
                   </button>
-                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("action.cancel")}</button>
+                  <button onClick={() => setContext({ ...context, mode: "actions" })}>{t("workspace.action.cancel")}</button>
                 </div>
               </div>
             )}
@@ -1175,17 +1193,28 @@ export function App() {
   );
 }
 
-function createInitialWorkspace() {
+function createInitialWorkspace(
+  application: Readonly<SynAIusApplicationManifest>,
+  t: ReturnType<typeof createTranslator>,
+  deviceNames: DeviceNames,
+  cloneNameTemplates: CloneNameTemplates,
+) {
   const detectedLayout = deviceKindForWidth(window.innerWidth);
   const fallback = createWorkspace({
-    workspaceId: "workspace-main",
-    initialViewId: "view-main",
-    initialViewName: t("view.defaultName"),
+    workspaceId: application.initialWorkspace.workspaceId,
+    initialViewId: application.initialWorkspace.viewId,
+    initialViewName: t(application.initialWorkspace.viewTitleKey),
     deviceNames,
     cloneNameTemplates,
     initialLayout: detectedLayout,
   });
-  let workspace = loadWorkspace(fallback, deviceNames, detectedLayout, cloneNameTemplates);
+  let workspace = loadWorkspace(
+    fallback,
+    deviceNames,
+    detectedLayout,
+    cloneNameTemplates,
+    application.storageNamespace,
+  );
   const selectedLayout = workspace.layouts[workspace.activeLayout]?.builtIn
     ? detectedLayout
     : workspace.activeLayout;
@@ -1213,7 +1242,11 @@ function deviceKindForWidth(width: number): BuiltInDeviceKind {
   return "desktop";
 }
 
-function nextAvailableName(key: string, occupiedNames: string[]) {
+function nextAvailableName(
+  t: ReturnType<typeof createTranslator>,
+  key: string,
+  occupiedNames: string[],
+) {
   const canonicalNames = new Set(occupiedNames.map((name) => name.toLocaleLowerCase("hu-HU")));
   let count = 1;
   while (canonicalNames.has(t(key, { count }).toLocaleLowerCase("hu-HU"))) count += 1;

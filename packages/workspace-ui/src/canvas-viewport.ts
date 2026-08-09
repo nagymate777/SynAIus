@@ -18,9 +18,9 @@ export function canvasViewportKey(viewId: string, device: LayoutId) {
   return `${viewId}:${device}`;
 }
 
-export function loadCanvasViewports(): CanvasViewportMap {
+export function loadCanvasViewports(storageNamespace = "synaius"): CanvasViewportMap {
   try {
-    const raw = localStorage.getItem(CANVAS_VIEWPORT_STORAGE_KEY);
+    const raw = localStorage.getItem(viewportStorageKey(storageNamespace));
     if (raw === null) return {};
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) return {};
@@ -31,13 +31,17 @@ export function loadCanvasViewports(): CanvasViewportMap {
   }
 }
 
-export function saveCanvasViewports(viewports: CanvasViewportMap) {
+export function saveCanvasViewports(viewports: CanvasViewportMap, storageNamespace = "synaius") {
   try {
-    localStorage.setItem(CANVAS_VIEWPORT_STORAGE_KEY, JSON.stringify(viewports));
+    localStorage.setItem(viewportStorageKey(storageNamespace), JSON.stringify(viewports));
     return true;
   } catch {
     return false;
   }
+}
+
+function viewportStorageKey(storageNamespace: string) {
+  return `${storageNamespace}.canvas-viewports.v1`;
 }
 
 export function zoomViewportAt(

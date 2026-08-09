@@ -7,11 +7,13 @@ import {
   migrateWorkspaceV3,
   migrateWorkspaceV4,
   migrateWorkspaceV5,
+  migrateWorkspaceV6,
   type LegacyWorkspaceStateV1,
   type LegacyWorkspaceStateV2,
   type LegacyWorkspaceStateV3,
   type LegacyWorkspaceStateV4,
   type LegacyWorkspaceStateV5,
+  type LegacyWorkspaceStateV6,
 } from "@synaius/domain";
 import {
   isLegacyWorkspaceState,
@@ -19,8 +21,9 @@ import {
   isLegacyWorkspaceStateV3,
   isLegacyWorkspaceStateV4,
   isLegacyWorkspaceStateV5,
+  isLegacyWorkspaceStateV6,
   isWorkspaceState,
-} from "../apps/portal/src/workspace-storage";
+} from "@synaius/workspace-ui";
 
 describe("workspace storage validation", () => {
   it("accepts the current schema and rejects broken references", () => {
@@ -100,7 +103,7 @@ describe("workspace storage validation", () => {
     };
     expect(isLegacyWorkspaceStateV2(previous)).toBe(true);
     const migrated = migrateWorkspaceV2(previous, "tablet");
-    expect(migrated.schemaVersion).toBe(6);
+    expect(migrated.schemaVersion).toBe(7);
     expect(migrated.activeLayout).toBe("tablet");
     expect(migrated.deviceDefaults).toEqual({ desktop: "main", tablet: "main", mobile: "main" });
     expect(migrated.boxes.content.layoutRects).toEqual({
@@ -139,7 +142,7 @@ describe("workspace storage validation", () => {
     expect(isLegacyWorkspaceStateV3(previous)).toBe(true);
     const migrated = migrateWorkspaceV3(previous);
     const systemBoxes = Object.values(migrated.boxes).filter((box) => box.role.type !== "content");
-    expect(migrated.schemaVersion).toBe(6);
+    expect(migrated.schemaVersion).toBe(7);
     expect(systemBoxes.every((box) => box.labelKey && migrated.localeMessages[box.labelKey] === box.name)).toBe(true);
   });
 
@@ -172,7 +175,7 @@ describe("workspace storage validation", () => {
       first: "{name} klónja",
       numbered: "{name} {count}. klónja",
     });
-    expect(migrated.schemaVersion).toBe(6);
+    expect(migrated.schemaVersion).toBe(7);
     expect(Object.values(migrated.boxes).every((box) => !("archived" in box))).toBe(true);
     expect(Object.values(migrated.boxes).every((box) => box.cloneSourceId === null)).toBe(true);
   });
@@ -186,21 +189,63 @@ describe("workspace storage validation", () => {
       boxes,
       ...base
     } = current;
+    const localeMessages: Record<string, string> = {
+      ...base.localeMessages,
+      "box.cloneName": base.localeMessages["workspace.box.cloneName"],
+      "box.cloneNameNumbered": base.localeMessages["workspace.box.cloneNameNumbered"],
+    };
+    delete localeMessages["workspace.box.cloneName"];
+    delete localeMessages["workspace.box.cloneNameNumbered"];
     const previous: LegacyWorkspaceStateV5 = {
       ...base,
+      localeMessages,
       schemaVersion: 5,
       activeLayout: "desktop",
       deviceDefaults: { desktop: "main", tablet: "main", mobile: "main" },
       boxes: Object.fromEntries(Object.values(boxes).map((box) => {
-        const { hiddenWhenLocked: _hiddenWhenLocked, ...legacyBox } = box;
+        const { contentId: _contentId, hiddenWhenLocked: _hiddenWhenLocked, ...legacyBox } = box;
         return [box.id, legacyBox];
       })),
     };
     expect(isLegacyWorkspaceStateV5(previous)).toBe(true);
     const migrated = migrateWorkspaceV5(previous);
-    expect(migrated.schemaVersion).toBe(6);
+    expect(migrated.schemaVersion).toBe(7);
     expect(migrated.layoutOrder).toEqual(["desktop", "tablet", "mobile"]);
     expect(Object.values(migrated.layouts).every((layout) => layout.builtIn)).toBe(true);
     expect(Object.values(migrated.boxes).every((box) => !box.hiddenWhenLocked)).toBe(true);
+  });
+
+  it("migrates version six into content-aware boxes and owned localization namespaces", () => {
+    const current = createWorkspace({ workspaceId: "workspace", initialViewId: "main", initialViewName: "Alapnézet" });
+    const {
+      schemaVersion: _schemaVersion,
+      contents: _contents,
+      boxes,
+      localeMessages: currentMessages,
+      ...base
+    } = current;
+    const localeMessages: Record<string, string> = {
+      ...currentMessages,
+      "box.cloneName": currentMessages["workspace.box.cloneName"],
+      "box.cloneNameNumbered": currentMessages["workspace.box.cloneNameNumbered"],
+    };
+    delete localeMessages["workspace.box.cloneName"];
+    delete localeMessages["workspace.box.cloneNameNumbered"];
+    const previous: LegacyWorkspaceStateV6 = {
+      ...base,
+      schemaVersion: 6,
+      boxes: Object.fromEntries(Object.values(boxes).map((box) => {
+        const { contentId: _contentId, ...legacyBox } = box;
+        return [box.id, legacyBox];
+      })),
+      localeMessages,
+    };
+
+    expect(isLegacyWorkspaceStateV6(previous)).toBe(true);
+    const migrated = migrateWorkspaceV6(previous);
+    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.contents).toEqual({});
+    expect(Object.values(migrated.boxes).every((box) => box.contentId === null)).toBe(true);
+    expect(migrated.localeMessages["workspace.box.cloneName"]).toBeDefined();
   });
 });

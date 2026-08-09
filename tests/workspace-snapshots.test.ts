@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createWorkspace, type LegacyWorkspaceStateV3 } from "@synaius/domain";
-import { createWorkspaceSnapshot, parseWorkspaceExport } from "../apps/portal/src/workspace-snapshots";
+import { createWorkspaceSnapshot, parseWorkspaceExport } from "@synaius/workspace-ui";
 
 const deviceNames = { desktop: "Asztali gép", tablet: "Táblagép", mobile: "Mobiltelefon" };
 const cloneNameTemplates = { first: "{name} klónja", numbered: "{name} {count}. klónja" };
@@ -40,7 +40,7 @@ describe("workspace snapshots", () => {
         return [box.id, { ...legacyBox, archived: false }];
       })),
     };
-    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop", cloneNameTemplates)?.schemaVersion).toBe(6);
+    expect(parseWorkspaceExport(JSON.stringify(legacy), deviceNames, "desktop", cloneNameTemplates)?.schemaVersion).toBe(7);
     expect(parseWorkspaceExport("not-json", deviceNames, "desktop", cloneNameTemplates)).toBeNull();
     expect(parseWorkspaceExport(JSON.stringify({ schemaVersion: 2 }), deviceNames, "desktop", cloneNameTemplates)).toBeNull();
   });
