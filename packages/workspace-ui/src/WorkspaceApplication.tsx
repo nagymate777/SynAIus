@@ -695,6 +695,7 @@ export function WorkspaceApplication({ application, contentRegistry, initializeW
         ) : (
           <input
             id={`content-field-${field.key}`}
+            type={field.input === "url" ? "url" : "text"}
             required={field.required}
             placeholder={field.placeholderKey ? t(field.placeholderKey) : undefined}
             value={context.contentValues[field.key] ?? ""}

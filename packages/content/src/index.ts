@@ -16,7 +16,7 @@ export interface ContentCatalogFieldDefinition {
   key: string;
   labelKey: string;
   placeholderKey?: string;
-  input: "text" | "textarea";
+  input: "text" | "textarea" | "url";
   required: boolean;
 }
 
@@ -193,7 +193,7 @@ function normalizeCatalog(catalog: ContentCatalogDefinition): ContentCatalogDefi
     if (!field.labelKey.trim() || (field.placeholderKey !== undefined && !field.placeholderKey.trim())) {
       throw new ContentContractError("content.catalog.field.localeKey.invalid");
     }
-    if (field.input !== "text" && field.input !== "textarea") {
+    if (field.input !== "text" && field.input !== "textarea" && field.input !== "url") {
       throw new ContentContractError("content.catalog.field.input.invalid");
     }
     if (typeof catalog.initialConfiguration[field.key] !== "string") {

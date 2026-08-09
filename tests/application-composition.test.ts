@@ -12,6 +12,7 @@ describe("application composition", () => {
       "artifact-viewer",
       "html-panel",
       "thread-stream",
+      "web-panel",
     ]);
   });
 });

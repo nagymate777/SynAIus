@@ -8,6 +8,7 @@ import { createArtifactViewerRenderer } from "@synaius/module-artifact-viewer/re
 import { createHtmlPanelRenderer } from "@synaius/module-html-panel/renderer";
 import { BrowserThreadStreamGateway } from "@synaius/module-thread-stream/client";
 import { createThreadStreamRenderer } from "@synaius/module-thread-stream/renderer";
+import { createWebPanelRenderer } from "@synaius/module-web-panel/renderer";
 import { createTranslator } from "@synaius/i18n";
 import { mountWorkspaceApplication, type WorkspaceContentRenderContext } from "@synaius/workspace-ui";
 import type { ReactNode } from "react";
@@ -24,6 +25,10 @@ contentRegistry.register(createArtifactViewerRenderer({
   localeMessages: hu,
 }));
 contentRegistry.register(createHtmlPanelRenderer({ localeMessages: hu }));
+contentRegistry.register(createWebPanelRenderer({
+  localeMessages: hu,
+  portalOrigin: window.location.origin,
+}));
 contentRegistry.register(createThreadStreamRenderer({
   gateway: new BrowserThreadStreamGateway(),
   localeMessages: hu,
