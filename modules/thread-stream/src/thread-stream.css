@@ -1,0 +1,109 @@
+.thread-stream-panel {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  gap: 0.4rem;
+  padding: 0.55rem;
+  color: #e9f4f2;
+  background: rgb(4 13 18 / 78%);
+}
+
+.thread-stream-panel[data-box-names-visible="true"] {
+  padding-top: 1.7rem;
+}
+
+.thread-stream-toolbar,
+.thread-stream-compose {
+  display: flex;
+  min-width: 0;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.thread-stream-compose input {
+  width: 0;
+}
+
+.thread-stream-compose button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.thread-stream-toolbar select,
+.thread-stream-compose input {
+  min-width: 0;
+  flex: 1;
+  padding: 0.38rem 0.48rem;
+  border: 1px solid #36535b;
+  border-radius: 0.35rem;
+  background: #07171d;
+  color: inherit;
+}
+
+.thread-stream-connection {
+  flex: 0 0 auto;
+  max-width: 42%;
+  overflow: hidden;
+  color: #83d9cb;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-stream-title {
+  overflow: hidden;
+  color: #a8c7c4;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-stream-log {
+  min-height: 0;
+  overflow: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.2rem;
+}
+
+.thread-stream-line {
+  min-width: 0;
+  max-width: 90%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #28454d;
+  border-radius: 0.5rem;
+  background: #0b2028;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thread-stream-line[data-kind="user"] {
+  align-self: flex-end;
+  border-color: #31566a;
+  background: #102d3a;
+}
+
+.thread-stream-empty,
+.thread-stream-error {
+  margin: auto;
+  color: #91aaa8;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.thread-stream-error {
+  margin: 0;
+  color: #ff9f9f;
+}
+
+.thread-stream-compose button {
+  padding: 0.38rem 0.5rem;
+}

@@ -117,14 +117,16 @@ type CanvasWorldStyle = CSSProperties & { transform: string };
 export interface WorkspaceContentRenderContext {
   box: BoxNode;
   workspace: WorkspaceState;
+  execute<T extends WorkspaceCommand["type"]>(type: T, payload: CommandPayload<T>): void;
 }
 
 export interface WorkspaceApplicationProps {
   application: Readonly<SynAIusApplicationManifest>;
   contentRegistry?: ContentRegistry<ReactNode, WorkspaceContentRenderContext>;
+  initializeWorkspace?: (workspace: WorkspaceState) => WorkspaceState;
 }
 
-export function WorkspaceApplication({ application, contentRegistry }: WorkspaceApplicationProps) {
+export function WorkspaceApplication({ application, contentRegistry, initializeWorkspace }: WorkspaceApplicationProps) {
   const t = useMemo(() => createTranslator(application.localeMessages), [application]);
   const deviceNames = useMemo<DeviceNames>(() => ({
     desktop: t("workspace.device.desktop"),
@@ -136,7 +138,7 @@ export function WorkspaceApplication({ application, contentRegistry }: Workspace
     numbered: t("workspace.box.cloneNameNumbered", { name: "{name}", count: "{count}" }),
   }), [t]);
   const [editor, setEditor] = useState<EditorState>(() => createEditorState(
-    createInitialWorkspace(application, t, deviceNames, cloneNameTemplates),
+    createInitialWorkspace(application, t, deviceNames, cloneNameTemplates, initializeWorkspace),
   ));
   const workspace = editor.workspace;
   const activeView = workspace.views[workspace.activeViewId];
@@ -785,7 +787,7 @@ export function WorkspaceApplication({ application, contentRegistry }: Workspace
         )}
         {box.role.type === "content" && box.contentId && contentRegistry && (
           <div className="box-content" data-content-id={box.contentId}>
-            {contentRegistry.render(workspace.contents[box.contentId], { box, workspace })}
+            {contentRegistry.render(workspace.contents[box.contentId], { box, workspace, execute: send })}
           </div>
         )}
         <div
@@ -1198,6 +1200,7 @@ function createInitialWorkspace(
   t: ReturnType<typeof createTranslator>,
   deviceNames: DeviceNames,
   cloneNameTemplates: CloneNameTemplates,
+  initializeWorkspace?: (workspace: WorkspaceState) => WorkspaceState,
 ) {
   const detectedLayout = deviceKindForWidth(window.innerWidth);
   const fallback = createWorkspace({
@@ -1215,6 +1218,7 @@ function createInitialWorkspace(
     cloneNameTemplates,
     application.storageNamespace,
   );
+  workspace = initializeWorkspace?.(workspace) ?? workspace;
   const selectedLayout = workspace.layouts[workspace.activeLayout]?.builtIn
     ? detectedLayout
     : workspace.activeLayout;

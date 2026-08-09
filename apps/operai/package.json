@@ -9,6 +9,9 @@
   },
   "dependencies": {
     "@synaius/application": "0.0.0",
+    "@synaius/content": "0.0.0",
+    "@synaius/domain": "0.0.0",
+    "@synaius/module-thread-stream": "0.0.0",
     "@synaius/workspace-ui": "0.0.0"
   }
 }

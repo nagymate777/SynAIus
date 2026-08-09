@@ -11,7 +11,10 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace @synaius/studio",
-    "dev:operai": "npm run dev --workspace @synaius/operai",
+    "dev:operai": "node scripts/dev-operai.mjs",
+    "dev:operai:ui": "npm run dev --workspace @synaius/operai",
+    "dev:operai:bridge": "npm run dev --workspace @synaius/operai-bridge",
+    "smoke:operai:bridge": "node scripts/smoke-operai-bridge.ts",
     "build:studio": "npm run build --workspace @synaius/studio",
     "build:operai": "npm run build --workspace @synaius/operai",
     "build": "npm run build:studio && npm run build:operai",

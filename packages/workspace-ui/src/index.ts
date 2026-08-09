@@ -3,7 +3,7 @@ export {
   type WorkspaceApplicationProps,
   type WorkspaceContentRenderContext,
 } from "./WorkspaceApplication";
-export { mountWorkspaceApplication } from "./mount";
+export { mountWorkspaceApplication, type WorkspaceMountOptions } from "./mount";
 export * from "./canvas-viewport";
 export * from "./editor-history";
 export * from "./grid-interaction";

@@ -1,4 +1,5 @@
 import { defineSynAIusApplication } from "@synaius/application";
+import { threadStreamModuleManifest } from "@synaius/module-thread-stream";
 import hu from "../../../locales/hu.json";
 
 export const operaiApplication = defineSynAIusApplication({
@@ -14,6 +15,6 @@ export const operaiApplication = defineSynAIusApplication({
     viewId: "operai-view-main",
     viewTitleKey: "app.operai.initialView",
   },
-  modules: [],
+  modules: [threadStreamModuleManifest],
   localeMessages: hu,
 });

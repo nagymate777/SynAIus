@@ -10,7 +10,7 @@ const localeFiles = readdirSync(join(rootPath, "locales")).filter((name) => name
 if (localeFiles.length !== 1 || localeFiles[0] !== "hu.json") failures.push("only locales/hu.json is allowed during initial development");
 
 for (const [key, value] of Object.entries(dictionary)) {
-  if (!/^[a-z][A-Za-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$/.test(key)) failures.push(`invalid key: ${key}`);
+  if (!/^[a-z][A-Za-z0-9-]*(?:\.[a-z][A-Za-z0-9-]*)+$/.test(key)) failures.push(`invalid key: ${key}`);
   if (!/^(?:core|workspace|module\.[a-z][a-z0-9-]*|app\.[a-z][a-z0-9-]*)\./.test(key)) {
     failures.push(`key outside an owned namespace: ${key}`);
   }
